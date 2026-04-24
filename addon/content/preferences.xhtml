@@ -1,0 +1,154 @@
+<linkset>
+  <html:link rel="localization" href="__addonRef__-preferences.ftl" />
+</linkset>
+<groupbox
+  onload="Zotero.__addonInstance__.hooks.onPrefsEvent('load', { window })"
+>
+  <label><html:h2 data-l10n-id="pref-title"></html:h2></label>
+
+  <vbox style="gap: 10px;">
+    <hbox align="center" style="gap: 8px;">
+      <html:label for="zotero-prefpane-__addonRef__-baseurl" data-l10n-id="pref-baseurl"></html:label>
+      <html:input
+        type="text"
+        id="zotero-prefpane-__addonRef__-baseurl"
+        preference="llm.baseURL"
+        style="flex: 1; min-width: 360px;"
+      />
+    </hbox>
+
+    <hbox align="center" style="gap: 8px;">
+      <html:label for="zotero-prefpane-__addonRef__-apikey" data-l10n-id="pref-apikey"></html:label>
+      <html:input
+        type="password"
+        id="zotero-prefpane-__addonRef__-apikey"
+        preference="llm.apiKey"
+        style="flex: 1; min-width: 360px;"
+      />
+    </hbox>
+
+    <hbox align="center" style="gap: 8px;">
+      <html:label for="zotero-prefpane-__addonRef__-model" data-l10n-id="pref-model"></html:label>
+      <html:input
+        type="text"
+        id="zotero-prefpane-__addonRef__-model"
+        preference="llm.model"
+        style="flex: 1; min-width: 360px;"
+      />
+    </hbox>
+
+    <hbox align="center" style="gap: 8px;">
+      <html:label for="zotero-prefpane-__addonRef__-lang" data-l10n-id="pref-language"></html:label>
+      <menulist
+        id="zotero-prefpane-__addonRef__-lang"
+        preference="ui.language"
+      >
+        <menupopup>
+          <menuitem data-l10n-id="pref-language-auto" value="" />
+          <menuitem label="English" value="en" />
+          <menuitem label="中文" value="zh" />
+        </menupopup>
+      </menulist>
+    </hbox>
+
+    <vbox style="gap: 4px;">
+      <html:label for="zotero-prefpane-__addonRef__-focus" data-l10n-id="pref-focus"></html:label>
+      <html:textarea
+        id="zotero-prefpane-__addonRef__-focus"
+        preference="researchFocus"
+        rows="3"
+        style="flex: 1;"
+      ></html:textarea>
+    </vbox>
+
+    <separator class="thin" />
+
+    <hbox align="center" style="gap: 8px;">
+      <html:label for="zotero-prefpane-__addonRef__-ranking-mode" data-l10n-id="pref-ranking-mode"></html:label>
+      <menulist
+        id="zotero-prefpane-__addonRef__-ranking-mode"
+        preference="ranking.mode"
+      >
+        <menupopup>
+          <menuitem data-l10n-id="pref-ranking-mode-papers" value="papers" />
+          <menuitem data-l10n-id="pref-ranking-mode-idea" value="idea" />
+        </menupopup>
+      </menulist>
+    </hbox>
+
+    <label><html:h3 data-l10n-id="pref-idea-heading"></html:h3></label>
+
+    <hbox align="center" style="gap: 8px;">
+      <html:label for="zotero-prefpane-__addonRef__-idea-picker" data-l10n-id="pref-idea-active"></html:label>
+      <menulist
+        id="zotero-prefpane-__addonRef__-idea-picker"
+        style="flex: 1; min-width: 280px;"
+      >
+        <menupopup id="zotero-prefpane-__addonRef__-idea-picker-popup">
+          <!-- populated dynamically by preferenceScript.ts -->
+        </menupopup>
+      </menulist>
+      <button
+        id="zotero-prefpane-__addonRef__-idea-new"
+        data-l10n-id="pref-idea-new"
+      />
+      <button
+        id="zotero-prefpane-__addonRef__-idea-delete"
+        data-l10n-id="pref-idea-delete"
+      />
+    </hbox>
+
+    <hbox align="center" style="gap: 8px;">
+      <html:label for="zotero-prefpane-__addonRef__-idea-name" data-l10n-id="pref-idea-name"></html:label>
+      <html:input
+        type="text"
+        id="zotero-prefpane-__addonRef__-idea-name"
+        style="flex: 1; min-width: 360px;"
+      />
+    </hbox>
+
+    <vbox style="gap: 4px;">
+      <html:label for="zotero-prefpane-__addonRef__-idea-text" data-l10n-id="pref-idea-text"></html:label>
+      <html:textarea
+        id="zotero-prefpane-__addonRef__-idea-text"
+        rows="6"
+        style="flex: 1;"
+      ></html:textarea>
+    </vbox>
+
+    <hbox align="center" style="gap: 8px;">
+      <button
+        id="zotero-prefpane-__addonRef__-idea-save"
+        data-l10n-id="pref-idea-save"
+      />
+      <label
+        id="zotero-prefpane-__addonRef__-idea-status"
+        style="color: #888; font-style: italic;"
+      />
+    </hbox>
+
+    <separator class="thin" />
+    <label><html:h3 data-l10n-id="pref-maintenance-heading"></html:h3></label>
+    <hbox align="center" style="gap: 8px;">
+      <button
+        id="zotero-prefpane-__addonRef__-rescore-now"
+        data-l10n-id="pref-rescore-now"
+      />
+      <button
+        id="zotero-prefpane-__addonRef__-clear-cache"
+        data-l10n-id="pref-clear-cache"
+      />
+      <label
+        id="zotero-prefpane-__addonRef__-maint-status"
+        style="color: #888; font-style: italic;"
+      />
+    </hbox>
+  </vbox>
+</groupbox>
+
+<vbox>
+  <html:label
+    data-l10n-id="pref-help"
+    data-l10n-args='{"time": "__buildTime__","name": "__addonName__","version":"__buildVersion__"}'
+  ></html:label>
+</vbox>

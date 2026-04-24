@@ -1,0 +1,11 @@
+pref("enable", true);
+pref("llm.baseURL", "https://openrouter.ai/api/v1");
+pref("llm.apiKey", "");
+pref("llm.model", "openai/gpt-4o-mini");
+pref("researchFocus", "");
+pref("ranking.mode", "papers");
+pref("idea.activeID", 0);
+pref("ui.language", "");
+pref("debug.testOnStartup", false);
+pref("debug.arxivIds", "");
+pref("debug.probeArxivID", "");
