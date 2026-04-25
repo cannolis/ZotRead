@@ -224,22 +224,51 @@ async function renderStatusBanner(prefsWindow: Window): Promise<void> {
 
 function bindMaintenanceButtons(prefsWindow: Window): void {
   const doc = prefsWindow.document;
-  const rescoreBtn = doc.getElementById(
-    `zotero-prefpane-${config.addonRef}-rescore-now`,
-  );
-  const clearBtn = doc.getElementById(
-    `zotero-prefpane-${config.addonRef}-clear-cache`,
-  );
-  const status = doc.getElementById(
-    `zotero-prefpane-${config.addonRef}-maint-status`,
-  );
+  const r = config.addonRef;
+  const buttons = [
+    {
+      rescore: doc.getElementById(`zotero-prefpane-${r}-rescore-now`),
+      clear: doc.getElementById(`zotero-prefpane-${r}-clear-cache`),
+      status: doc.getElementById(`zotero-prefpane-${r}-maint-status`),
+    },
+    {
+      rescore: doc.getElementById(`zotero-prefpane-${r}-rescore-now-top`),
+      clear: doc.getElementById(`zotero-prefpane-${r}-clear-cache-top`),
+      status: doc.getElementById(`zotero-prefpane-${r}-maint-status-top`),
+    },
+  ];
 
   const setStatusLabel = (text: string) => {
-    status?.setAttribute("value", text);
-    (status as any).textContent = text;
+    for (const b of buttons) {
+      if (!b.status) continue;
+      b.status.setAttribute("value", text);
+      (b.status as any).textContent = text;
+    }
   };
 
-  rescoreBtn?.addEventListener("command", async () => {
+  // Wire both copies of the buttons (top + bottom).
+  const rescoreBtn = {
+    addEventListener: (
+      type: string,
+      handler: (ev: Event) => void,
+    ) => {
+      for (const b of buttons) {
+        b.rescore?.addEventListener(type, handler);
+      }
+    },
+  } as { addEventListener: (t: string, h: (ev: Event) => void) => void };
+  const clearBtn = {
+    addEventListener: (
+      type: string,
+      handler: (ev: Event) => void,
+    ) => {
+      for (const b of buttons) {
+        b.clear?.addEventListener(type, handler);
+      }
+    },
+  } as { addEventListener: (t: string, h: (ev: Event) => void) => void };
+
+  rescoreBtn.addEventListener("command", async () => {
     setStatusLabel("Rescoring…");
     const pt = new ProgressToast(
       "ZotRead",

@@ -28,6 +28,8 @@ export type FluentMessageId =
   | 'pref-rescore-now'
   | 'pref-scope-collection'
   | 'pref-scope-heading'
+  | 'pref-scope-help'
+  | 'pref-scope-help-2'
   | 'pref-stats-heading'
   | 'pref-title'
   | 'pref-topcoll-enabled'

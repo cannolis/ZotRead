@@ -116,7 +116,34 @@ async function processOne(itemID: number): Promise<void> {
   // Skip if this item IS an anchor
   if (anchorIDs.includes(itemID)) return;
 
+  // Honour the user-configured ranking scope: if a scope collection is
+  // set and the new item is not inside it, skip pairwise scoring so
+  // the ranking pipeline stays consistent with rescoreAll.
+  const scopeID = readScopeCollectionID();
+  if (scopeID > 0) {
+    const inScope = (item.getCollections?.() ?? []).includes(scopeID);
+    if (!inScope) {
+      Zotero.debug(
+        `[ZotRead] autoscore: item ${itemID} outside scope collection ${scopeID}, skipping`,
+      );
+      return;
+    }
+  }
+
   await computeSimilarityBatchByIDs(anchorIDs, item);
+}
+
+function readScopeCollectionID(): number {
+  try {
+    const raw = (Zotero.Prefs.get(
+      "extensions.zotero.zotread.ranking.scopeCollectionID",
+      true,
+    ) as number | string | undefined) ?? 0;
+    const n = typeof raw === "number" ? raw : parseInt(String(raw), 10);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch (_e) {
+    return 0;
+  }
 }
 
 function sleep(ms: number): Promise<void> {

@@ -350,23 +350,64 @@ export async function deleteOverridesInvolving(itemID: number): Promise<void> {
 }
 
 /**
- * Read effective per-anchor similarities for a candidate.  An override
- * row always wins over the cached LLM row.  Returns SimilarityRow-shaped
- * objects so callers can reuse field access.
+ * Read effective per-anchor similarities for a candidate.
+ *
+ * Lookup is keyed by **content hash**, not item ID, so true duplicates
+ * (e.g. the same arXiv paper imported twice into different Zotero
+ * collections) always read the same score even if past LLM calls drifted.
+ * When the same hash pair has multiple rows we pick the most recent, so
+ * a freshly recomputed score wins over a stale one.
+ *
+ * User overrides (zotread_override) always win over the cached LLM row.
  */
 export async function getEffectiveSimilarities(
   anchorItemIDs: number[],
   candidateItemID: number,
   method: string,
 ): Promise<Map<number, SimilarityRow>> {
+  await ensureSchema();
   if (anchorItemIDs.length === 0) return new Map();
-  const [base, overrides] = await Promise.all([
-    getSimilarityMap(anchorItemIDs, candidateItemID, method),
-    getOverridesFor(candidateItemID),
-  ]);
+
+  // Pull all content hashes (anchor + candidate) in a single query.
+  const idList = [candidateItemID, ...anchorItemIDs];
+  const placeholders = idList.map(() => "?").join(",");
+  const hashRows = (await Zotero.DB.queryAsync(
+    `SELECT itemID, contentHash FROM zotread_summary WHERE itemID IN (${placeholders})`,
+    idList,
+  )) as Array<{ itemID: number; contentHash: string }>;
+  const hashMap = new Map<number, string>();
+  for (const r of hashRows ?? []) hashMap.set(r.itemID, r.contentHash);
+
+  const candidateHash = hashMap.get(candidateItemID);
+  const map = new Map<number, SimilarityRow>();
+
+  if (candidateHash) {
+    for (const anchorID of anchorItemIDs) {
+      const anchorHash = hashMap.get(anchorID);
+      if (!anchorHash) continue;
+      const row = (await Zotero.DB.rowQueryAsync(
+        `SELECT anchorItemID, candidateItemID, anchorContentHash, candidateContentHash,
+                method, similarity, rationale, role, createdAt
+           FROM zotread_similarity
+          WHERE anchorContentHash = ? AND candidateContentHash = ? AND method = ?
+       ORDER BY createdAt DESC
+          LIMIT 1`,
+        [anchorHash, candidateHash, method],
+      )) as SimilarityRow | false | undefined;
+      if (row) map.set(anchorID, row);
+    }
+  } else {
+    // Fallback: candidate has no summary yet; use the legacy itemID-keyed
+    // lookup so a partially populated DB still returns something.
+    const legacy = await getSimilarityMap(anchorItemIDs, candidateItemID, method);
+    for (const [k, v] of legacy) map.set(k, v);
+  }
+
+  // Apply user overrides on top.
+  const overrides = await getOverridesFor(candidateItemID);
   for (const [anchorID, ov] of overrides) {
     if (!anchorItemIDs.includes(anchorID)) continue;
-    base.set(anchorID, {
+    map.set(anchorID, {
       anchorItemID: anchorID,
       candidateItemID,
       anchorContentHash: "(override)",
@@ -378,7 +419,7 @@ export async function getEffectiveSimilarities(
       createdAt: ov.updatedAt,
     });
   }
-  return base;
+  return map;
 }
 
 // ── cache maintenance ─────────────────────────────────────────────

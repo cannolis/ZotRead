@@ -12,6 +12,22 @@
     style="gap: 4px; margin-bottom: 6px;"
   />
 
+  <!-- Quick actions, pinned near the top so they're easy to find. -->
+  <hbox align="center" style="gap: 8px; margin-bottom: 8px;">
+    <button
+      id="zotero-prefpane-__addonRef__-rescore-now-top"
+      data-l10n-id="pref-rescore-now"
+    />
+    <button
+      id="zotero-prefpane-__addonRef__-clear-cache-top"
+      data-l10n-id="pref-clear-cache"
+    />
+    <label
+      id="zotero-prefpane-__addonRef__-maint-status-top"
+      style="color: #888; font-style: italic;"
+    />
+  </hbox>
+
   <vbox style="gap: 10px;">
     <hbox align="center" style="gap: 8px;">
       <html:label for="zotero-prefpane-__addonRef__-baseurl" data-l10n-id="pref-baseurl"></html:label>
@@ -146,6 +162,14 @@
         </menupopup>
       </menulist>
     </hbox>
+    <html:div
+      data-l10n-id="pref-scope-help"
+      style="color: #888; font-size: 11px; margin-left: 4px; line-height: 1.5;"
+    />
+    <html:div
+      data-l10n-id="pref-scope-help-2"
+      style="color: #888; font-size: 11px; margin-left: 4px; line-height: 1.5;"
+    />
 
     <separator class="thin" />
     <label><html:h3 data-l10n-id="pref-topcoll-heading"></html:h3></label>
