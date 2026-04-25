@@ -4,6 +4,7 @@ import { importArxivIntoZotero } from "./services/arxiv";
 import {
   addAnchor,
   clearAllCache,
+  clearOverride,
   deleteIdea as dbDeleteIdea,
   getIdea,
   IdeaRow,
@@ -12,6 +13,7 @@ import {
   listAnchors,
   listIdeas,
   removeAnchor,
+  setOverride,
   setStatus,
   getStatus,
   ItemStatus,
@@ -28,6 +30,7 @@ import { runBackfill } from "./modules/summaryQueue";
 import { computeSimilarityBatch } from "./modules/similarity";
 import { refreshScoreMap } from "./modules/scoreColumn";
 import { refreshStatusMap } from "./modules/statusColumn";
+import { syncTopCollection } from "./modules/topCollection";
 import {
   clearIdeaCache,
   ensureIdeaSummary,
@@ -160,14 +163,21 @@ async function readingQueue(opts: {
 async function rescoreAll(opts: {
   limit?: number;
   onProgress?: (p: { done: number; total: number; title: string }) => void;
-} = {}): Promise<{ ranked: number }> {
+} = {}): Promise<{ ranked: number; topCollection: number }> {
   const queue = await rankReadingQueue({
     limit: opts.limit ?? 500,
     onProgress: (p) =>
       opts.onProgress?.({ done: p.done, total: p.total, title: p.title }),
   });
   await Promise.all([refreshScoreMap(), refreshStatusMap()]);
-  return { ranked: queue.length };
+  let topCount = 0;
+  try {
+    const r = await syncTopCollection();
+    topCount = r.count;
+  } catch (e) {
+    Zotero.debug("[ZotRead] top collection sync failed: " + String(e));
+  }
+  return { ranked: queue.length, topCollection: topCount };
 }
 
 /**
@@ -258,6 +268,24 @@ async function currentIdea(): Promise<IdeaWithActive | null> {
   return { ...idea, isActive: true };
 }
 
+async function setScoreOverride(
+  candidateItemID: number,
+  anchorItemID: number,
+  similarity: number,
+  note?: string,
+): Promise<void> {
+  await setOverride(anchorItemID, candidateItemID, similarity, note);
+  await refreshScoreMap();
+}
+
+async function clearScoreOverride(
+  candidateItemID: number,
+  anchorItemID: number,
+): Promise<void> {
+  await clearOverride(anchorItemID, candidateItemID);
+  await refreshScoreMap();
+}
+
 async function refreshColumn(): Promise<{ scores: number; statuses: number }> {
   const [scores, statuses] = await Promise.all([
     refreshScoreMap(),
@@ -331,6 +359,10 @@ export const api = {
   refreshIdea,
   scoreOf,
   warmSimilaritiesFor,
+
+  // score override
+  setScoreOverride,
+  clearScoreOverride,
 
   // idea CRUD
   listIdeas: allIdeas,

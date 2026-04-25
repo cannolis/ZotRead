@@ -5,7 +5,7 @@
 
 import {
   getAllStatuses,
-  getSimilarityMap,
+  getEffectiveSimilarities,
   ItemStatus,
 } from "../services/db";
 import {
@@ -162,13 +162,45 @@ async function loadCandidates(
       opts.candidates.filter((id) => id > 0),
     );
   } else {
-    const libID = Zotero.Libraries.userLibraryID;
-    const ids = await Zotero.Items.getAllIDs(libID);
-    items = await Zotero.Items.getAsync(ids);
+    const scopeID = readScopeCollectionID();
+    if (scopeID > 0) {
+      const coll = Zotero.Collections.get(scopeID) as
+        | Zotero.Collection
+        | false
+        | undefined;
+      if (coll) {
+        items = coll.getChildItems() ?? [];
+      } else {
+        Zotero.debug(
+          `[ZotRead] scope collection ${scopeID} not found, falling back to library`,
+        );
+        const libID = Zotero.Libraries.userLibraryID;
+        const ids = await Zotero.Items.getAllIDs(libID);
+        items = await Zotero.Items.getAsync(ids);
+      }
+    } else {
+      const libID = Zotero.Libraries.userLibraryID;
+      const ids = await Zotero.Items.getAllIDs(libID);
+      items = await Zotero.Items.getAsync(ids);
+    }
   }
   return items.filter(
     (it) => it && it.isRegularItem() && !anchorSet.has(it.id),
   );
+}
+
+function readScopeCollectionID(): number {
+  // Lazy require to avoid circular import with prefs util
+  try {
+    const raw = (Zotero.Prefs.get(
+      "extensions.zotero.zotread.ranking.scopeCollectionID",
+      true,
+    ) as number | string | undefined) ?? 0;
+    const n = typeof raw === "number" ? raw : parseInt(String(raw), 10);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch (_e) {
+    return 0;
+  }
 }
 
 /**
@@ -187,7 +219,11 @@ export async function getCachedScore(
     : allAnchorIDs;
   if (anchorIDs.length === 0) return { score: 0, breakdown: [] };
 
-  const rows = await getSimilarityMap(anchorIDs, itemID, "llm-judge-v2");
+  const rows = await getEffectiveSimilarities(
+    anchorIDs,
+    itemID,
+    "llm-judge-v2",
+  );
   const values: number[] = [];
   const breakdown: AnchorBreakdown[] = [];
   for (const [anchorID, row] of rows) {

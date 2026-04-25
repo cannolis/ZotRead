@@ -13,8 +13,12 @@ declare namespace _ZoteroTypes {
       "llm.model": string;
       "researchFocus": string;
       "ranking.mode": string;
+      "ranking.scopeCollectionID": number;
       "idea.activeID": number;
       "ui.language": string;
+      "topCollection.enabled": boolean;
+      "topCollection.size": number;
+      "topCollection.name": string;
       "debug.testOnStartup": boolean;
       "debug.arxivIds": string;
       "debug.probeArxivID": string;

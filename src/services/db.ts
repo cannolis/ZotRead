@@ -87,6 +87,14 @@ const CREATE_SQL: readonly string[] = [
      createdAt INTEGER NOT NULL,
      updatedAt INTEGER NOT NULL
    )`,
+  `CREATE TABLE IF NOT EXISTS zotread_override (
+     anchorItemID    INTEGER NOT NULL,
+     candidateItemID INTEGER NOT NULL,
+     similarity      REAL NOT NULL,
+     note            TEXT,
+     updatedAt       INTEGER NOT NULL,
+     PRIMARY KEY (anchorItemID, candidateItemID)
+   )`,
   `CREATE INDEX IF NOT EXISTS zotread_similarity_candidate_idx
      ON zotread_similarity(candidateItemID, method)`,
 ];
@@ -281,6 +289,96 @@ export async function getAllStatuses(): Promise<Map<number, StatusRow>> {
   const map = new Map<number, StatusRow>();
   for (const r of rows ?? []) map.set(r.itemID, r);
   return map;
+}
+
+// ── override CRUD ─────────────────────────────────────────────────
+
+export interface OverrideRow {
+  anchorItemID: number;
+  candidateItemID: number;
+  similarity: number;
+  note: string | null;
+  updatedAt: number;
+}
+
+export async function setOverride(
+  anchorItemID: number,
+  candidateItemID: number,
+  similarity: number,
+  note?: string,
+): Promise<void> {
+  await ensureSchema();
+  const clamped = Math.max(0, Math.min(1, similarity));
+  await Zotero.DB.queryAsync(
+    `INSERT OR REPLACE INTO zotread_override
+       (anchorItemID, candidateItemID, similarity, note, updatedAt)
+     VALUES (?, ?, ?, ?, ?)`,
+    [anchorItemID, candidateItemID, clamped, note ?? null, Date.now()],
+  );
+}
+
+export async function clearOverride(
+  anchorItemID: number,
+  candidateItemID: number,
+): Promise<void> {
+  await ensureSchema();
+  await Zotero.DB.queryAsync(
+    "DELETE FROM zotread_override WHERE anchorItemID = ? AND candidateItemID = ?",
+    [anchorItemID, candidateItemID],
+  );
+}
+
+export async function getOverridesFor(
+  candidateItemID: number,
+): Promise<Map<number, OverrideRow>> {
+  await ensureSchema();
+  const rows = (await Zotero.DB.queryAsync(
+    "SELECT anchorItemID, candidateItemID, similarity, note, updatedAt FROM zotread_override WHERE candidateItemID = ?",
+    [candidateItemID],
+  )) as OverrideRow[];
+  const map = new Map<number, OverrideRow>();
+  for (const r of rows ?? []) map.set(r.anchorItemID, r);
+  return map;
+}
+
+export async function deleteOverridesInvolving(itemID: number): Promise<void> {
+  await ensureSchema();
+  await Zotero.DB.queryAsync(
+    "DELETE FROM zotread_override WHERE anchorItemID = ? OR candidateItemID = ?",
+    [itemID, itemID],
+  );
+}
+
+/**
+ * Read effective per-anchor similarities for a candidate.  An override
+ * row always wins over the cached LLM row.  Returns SimilarityRow-shaped
+ * objects so callers can reuse field access.
+ */
+export async function getEffectiveSimilarities(
+  anchorItemIDs: number[],
+  candidateItemID: number,
+  method: string,
+): Promise<Map<number, SimilarityRow>> {
+  if (anchorItemIDs.length === 0) return new Map();
+  const [base, overrides] = await Promise.all([
+    getSimilarityMap(anchorItemIDs, candidateItemID, method),
+    getOverridesFor(candidateItemID),
+  ]);
+  for (const [anchorID, ov] of overrides) {
+    if (!anchorItemIDs.includes(anchorID)) continue;
+    base.set(anchorID, {
+      anchorItemID: anchorID,
+      candidateItemID,
+      anchorContentHash: "(override)",
+      candidateContentHash: "(override)",
+      method,
+      similarity: ov.similarity,
+      rationale: ov.note,
+      role: "same-problem",
+      createdAt: ov.updatedAt,
+    });
+  }
+  return base;
 }
 
 // ── cache maintenance ─────────────────────────────────────────────

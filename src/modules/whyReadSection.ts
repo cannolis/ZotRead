@@ -4,7 +4,7 @@
  */
 
 import {
-  getSimilarityMap,
+  getEffectiveSimilarities,
   isAnchor,
 } from "../services/db";
 import { getActiveIdea, isIdeaVirtualID } from "./ideaAnchor";
@@ -205,7 +205,7 @@ async function renderWhyRead(data: RenderData): Promise<void> {
     return;
   }
 
-  const sims = await getSimilarityMap(anchorIDs, item.id, METHOD);
+  const sims = await getEffectiveSimilarities(anchorIDs, item.id, METHOD);
   if (sims.size === 0) {
     setText(doc, root, s.notCompared, "#a07500");
     return;
@@ -316,6 +316,60 @@ async function renderWhyRead(data: RenderData): Promise<void> {
       nameSpan.textContent = ` — ${truncate(name, 70)}`;
       line.appendChild(scoreSpan);
       line.appendChild(nameSpan);
+
+      // Override / Reset link
+      const overrideLink = doc.createElementNS(
+        "http://www.w3.org/1999/xhtml",
+        "a",
+      );
+      overrideLink.setAttribute(
+        "style",
+        "margin-left: 8px; font-size: 10px; cursor: pointer; color: #3a7bd5; text-decoration: underline;",
+      );
+      const isOverride = row.anchorContentHash === "(override)";
+      overrideLink.textContent = isOverride
+        ? currentLang() === "zh"
+          ? "重置"
+          : "reset"
+        : currentLang() === "zh"
+          ? "修正分数"
+          : "edit";
+      overrideLink.addEventListener("click", async (ev: Event) => {
+        ev.preventDefault();
+        if (isOverride) {
+          try {
+            const { api } = await import("../api");
+            await api.clearScoreOverride(item.id, anchorID);
+            await renderWhyRead(data);
+          } catch (e) {
+            Zotero.debug("[ZotRead] override reset failed: " + String(e));
+          }
+        } else {
+          const win =
+            (data.doc as any)?.defaultView ??
+            Zotero.getMainWindow();
+          const promptText =
+            currentLang() === "zh"
+              ? `输入修正后的相似度（0.0 – 1.0），当前 ${row.similarity.toFixed(2)}：`
+              : `Enter overridden similarity (0.0 – 1.0). Current: ${row.similarity.toFixed(2)}`;
+          const ans = (win as any)?.prompt?.(
+            promptText,
+            row.similarity.toFixed(2),
+          );
+          if (ans === null || ans === undefined) return;
+          const num = parseFloat(String(ans).trim());
+          if (!Number.isFinite(num)) return;
+          try {
+            const { api } = await import("../api");
+            await api.setScoreOverride(item.id, anchorID, num, "user");
+            await renderWhyRead(data);
+          } catch (e) {
+            Zotero.debug("[ZotRead] override save failed: " + String(e));
+          }
+        }
+      });
+      line.appendChild(overrideLink);
+
       if (row.rationale) {
         const rat = doc.createElementNS(
           "http://www.w3.org/1999/xhtml",

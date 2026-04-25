@@ -6,7 +6,7 @@
  * (on startup, after every readingQueue() pass, on demand).
  */
 
-import { getSimilarityMap } from "../services/db";
+import { getEffectiveSimilarities } from "../services/db";
 import { getActiveAnchorIDs } from "./rankingMode";
 
 const COLUMN_KEY = "zotread-score";
@@ -145,7 +145,11 @@ export async function refreshScoreMap(): Promise<number> {
   // Column shows PURE relevance — read/unread status is shown separately
   // via the status column, so the user can do two-level sorting.
   for (const candidate of candidateItems) {
-    const rowMap = await getSimilarityMap(anchorIDs, candidate.id, METHOD);
+    const rowMap = await getEffectiveSimilarities(
+      anchorIDs,
+      candidate.id,
+      METHOD,
+    );
     if (rowMap.size === 0) continue;
     const rows = Array.from(rowMap.entries()).sort(
       (a, b) => b[1].similarity - a[1].similarity,

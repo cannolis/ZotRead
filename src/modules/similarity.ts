@@ -7,6 +7,7 @@
 
 import { chatJSON } from "../services/llm";
 import {
+  getOverridesFor,
   getSimilarity,
   getSimilarityMap,
   saveSimilarity,
@@ -128,9 +129,24 @@ export async function computeSimilarityBatchByIDs(
     candidateItem.id,
     SIMILARITY_METHOD,
   );
+  const overrides = await getOverridesFor(candidateItem.id);
 
   const results: SimilarityResult[] = [];
   for (const [anchorID, anchorRec] of anchorRecs) {
+    // User override always wins.
+    const ov = overrides.get(anchorID);
+    if (ov) {
+      results.push({
+        anchorItemID: anchorID,
+        candidateItemID: candidateItem.id,
+        similarity: ov.similarity,
+        rationale: ov.note ?? "(user override)",
+        role: "same-problem",
+        cached: true,
+      });
+      continue;
+    }
+
     const row = existing.get(anchorID);
     if (
       row &&

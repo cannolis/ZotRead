@@ -16,6 +16,8 @@ import {
 import { refreshScoreMap } from "./scoreColumn";
 import { refreshStatusMap } from "./statusColumn";
 import { ProgressToast, toastError, toastSuccess } from "./toast";
+import { getStats } from "./stats";
+import { getPref } from "../utils/prefs";
 
 /**
  * ZotRead preferences pane handler.
@@ -35,6 +37,189 @@ export async function registerPrefsScripts(prefsWindow: Window) {
   bindPrefEvents(prefsWindow);
   await buildIdeaUI(prefsWindow);
   bindMaintenanceButtons(prefsWindow);
+  await buildScopePicker(prefsWindow);
+  await renderStatsPanel(prefsWindow);
+  await renderStatusBanner(prefsWindow);
+}
+
+// ── ranking scope ──────────────────────────────────────────────────
+
+async function buildScopePicker(prefsWindow: Window): Promise<void> {
+  const doc = prefsWindow.document;
+  const r = config.addonRef;
+  const picker = doc.getElementById(`zotero-prefpane-${r}-scope-picker`) as any;
+  const popup = doc.getElementById(
+    `zotero-prefpane-${r}-scope-picker-popup`,
+  );
+  if (!picker || !popup) return;
+
+  while (popup.firstChild) popup.removeChild(popup.firstChild);
+
+  const none = doc.createXULElement("menuitem");
+  none.setAttribute("label", "(global — entire library)");
+  none.setAttribute("value", "0");
+  popup.appendChild(none);
+
+  const libID = Zotero.Libraries.userLibraryID;
+  const collections = Zotero.Collections.getByLibrary(libID, true);
+  for (const c of collections) {
+    const item = doc.createXULElement("menuitem");
+    item.setAttribute("label", indentName(c));
+    item.setAttribute("value", String(c.id));
+    popup.appendChild(item);
+  }
+
+  const current = String(
+    (Zotero.Prefs.get(
+      `extensions.zotero.${r}.ranking.scopeCollectionID`,
+      true,
+    ) as number | undefined) ?? 0,
+  );
+  picker.value = current;
+
+  picker.addEventListener("command", () => {
+    const v = parseInt(String(picker.value ?? "0"), 10) || 0;
+    Zotero.Prefs.set(
+      `extensions.zotero.${r}.ranking.scopeCollectionID`,
+      v,
+      true,
+    );
+    refreshScoreMap().catch(() => undefined);
+  });
+}
+
+function indentName(c: any): string {
+  let depth = 0;
+  let cur = c;
+  while (cur?.parentID) {
+    depth += 1;
+    cur = Zotero.Collections.get(cur.parentID);
+  }
+  return "  ".repeat(depth) + (c.name ?? "(unnamed)");
+}
+
+// ── stats panel ────────────────────────────────────────────────────
+
+async function renderStatsPanel(prefsWindow: Window): Promise<void> {
+  const doc = prefsWindow.document;
+  const root = doc.getElementById(
+    `zotero-prefpane-${config.addonRef}-stats-body`,
+  );
+  if (!root) return;
+  while (root.firstChild) root.removeChild(root.firstChild);
+
+  let stats;
+  try {
+    stats = await getStats();
+  } catch (e) {
+    const err = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
+    err.textContent = "Stats unavailable: " + String(e);
+    root.appendChild(err);
+    return;
+  }
+
+  const lang =
+    ((getPref("ui.language") as string) || "").toLowerCase() === "zh"
+      ? "zh"
+      : "en";
+  const labels =
+    lang === "zh"
+      ? {
+          anchors: "我的论文（anchor）",
+          ideas: "已保存的研究想法",
+          summaries: "已生成的论文摘要",
+          similarities: "已计算的成对相似度",
+          read: "已读论文",
+          reading: "正在读",
+          week: "本周读完",
+          month: "本月读完",
+        }
+      : {
+          anchors: "Anchors (my papers)",
+          ideas: "Saved ideas",
+          summaries: "Cached summaries",
+          similarities: "Cached pairwise scores",
+          read: "Total read",
+          reading: "Currently reading",
+          week: "Read this week",
+          month: "Read this month",
+        };
+
+  const lines: Array<[string, number]> = [
+    [labels.anchors, stats.anchors],
+    [labels.ideas, stats.ideas],
+    [labels.summaries, stats.summaries],
+    [labels.similarities, stats.similarities],
+    [labels.week, stats.readThisWeek],
+    [labels.month, stats.readThisMonth],
+    [labels.read, stats.readTotal],
+    [labels.reading, stats.readingNow],
+  ];
+  for (const [k, v] of lines) {
+    const row = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
+    row.textContent = `${k}: ${v}`;
+    root.appendChild(row);
+  }
+}
+
+// ── status banner ──────────────────────────────────────────────────
+
+async function renderStatusBanner(prefsWindow: Window): Promise<void> {
+  const doc = prefsWindow.document;
+  const root = doc.getElementById(
+    `zotero-prefpane-${config.addonRef}-status-banner`,
+  );
+  if (!root) return;
+  while (root.firstChild) root.removeChild(root.firstChild);
+
+  const apiKey = ((getPref("llm.apiKey") as string) || "").trim();
+  let stats;
+  try {
+    stats = await getStats();
+  } catch (_e) {
+    return;
+  }
+  const hasAnchorOrIdea = stats.anchors > 0 || stats.ideas > 0;
+  const hasScores = stats.similarities > 0;
+
+  const ok = apiKey && hasAnchorOrIdea && hasScores;
+  if (ok) {
+    // Quiet success line.
+    const line = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
+    line.setAttribute(
+      "style",
+      "padding: 6px 10px; background: #e9f6ec; border-left: 3px solid #3a8f3a; color: #2c6e2c; font-size: 11px;",
+    );
+    line.textContent = "✓ ZotRead is configured and ranking your library.";
+    root.appendChild(line);
+    return;
+  }
+
+  const wrap = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
+  wrap.setAttribute(
+    "style",
+    "padding: 8px 10px; background: #fff8e1; border-left: 3px solid #d6a700; color: #6a5200; font-size: 11px;",
+  );
+  const title = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
+  title.setAttribute("style", "font-weight: 700; margin-bottom: 4px;");
+  title.textContent = "Get started in 3 steps";
+  wrap.appendChild(title);
+
+  const steps: Array<[boolean, string]> = [
+    [Boolean(apiKey), "Paste an LLM API key below."],
+    [
+      hasAnchorOrIdea,
+      "Right-click a paper you've authored → ZotRead → Mark as my paper, or add an idea below.",
+    ],
+    [hasScores, 'Click "Rescore all now" once your anchors / idea are set.'],
+  ];
+  for (const [done, text] of steps) {
+    const s = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
+    s.textContent = (done ? "✓ " : "☐ ") + text;
+    s.setAttribute("style", done ? "color: #3a8f3a;" : "");
+    wrap.appendChild(s);
+  }
+  root.appendChild(wrap);
 }
 
 function bindMaintenanceButtons(prefsWindow: Window): void {
