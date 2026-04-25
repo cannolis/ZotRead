@@ -9,6 +9,8 @@
 ![status](https://img.shields.io/badge/status-alpha-orange?style=flat-square)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square)
 
+📖 **[User Guide](docs/USER_GUIDE.md)** · **[用户指南（中文）](docs/USER_GUIDE.zh-CN.md)** · [Changelog](CHANGELOG.md)
+
 ## Why
 
 Your Zotero library has hundreds of PDFs, you've read a fraction of them, and
