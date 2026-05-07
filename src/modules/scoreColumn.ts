@@ -8,9 +8,9 @@
 
 import { getEffectiveSimilarities } from "../services/db";
 import { getActiveAnchorIDs } from "./rankingMode";
+import { getSimilarityMethod } from "./similarity";
 
 const COLUMN_KEY = "zotread-score";
-const METHOD = "llm-judge-v2";
 
 const scoreMap = new Map<number, number>(); // itemID → aggregated score
 const tooltipMap = new Map<number, string>(); // itemID → per-anchor breakdown
@@ -72,11 +72,19 @@ export async function registerScoreColumn(): Promise<void> {
     minWidth: 60,
     defaultIn: ["default"],
     // zoteroPersist keys — without this Zotero may not expose column in sort UI
-    zoteroPersist: ["width", "ordinal", "hidden", "sortActive", "sortDirection"],
+    zoteroPersist: [
+      "width",
+      "ordinal",
+      "hidden",
+      "sortActive",
+      "sortDirection",
+    ],
   });
 
   registered = true;
-  Zotero.debug("[ZotRead] score column registered: " + String(registrationToken));
+  Zotero.debug(
+    "[ZotRead] score column registered: " + String(registrationToken),
+  );
 
   // Kick off an initial refresh asynchronously so the column isn't blank.
   refreshScoreMap().catch((e) =>
@@ -148,20 +156,22 @@ export async function refreshScoreMap(): Promise<number> {
     const rowMap = await getEffectiveSimilarities(
       anchorIDs,
       candidate.id,
-      METHOD,
+      getSimilarityMethod(),
     );
     if (rowMap.size === 0) continue;
     const rows = Array.from(rowMap.entries()).sort(
       (a, b) => b[1].similarity - a[1].similarity,
     );
+    // Use the maximum single-anchor similarity as the displayed score —
+    // pairs nicely with the WhyRead pane which shows the rationale of
+    // that same top anchor.
     const sims = rows.map(([, r]) => r.similarity);
-    const top = sims.slice(0, Math.min(3, sims.length));
-    const raw = top.reduce((s, v) => s + v, 0) / top.length;
+    const raw = Math.max(...sims);
     if (raw > 0) {
       scoreMap.set(candidate.id, raw);
       populated += 1;
-      // Build tooltip: aggregate header + per-anchor lines.
-      const lines: string[] = [`Aggregated: ${raw.toFixed(2)}`];
+      // Build tooltip: top score + per-anchor lines.
+      const lines: string[] = [`Top: ${raw.toFixed(2)}`];
       for (const [anchorID, row] of rows) {
         const title = truncate(anchorTitles.get(anchorID) ?? "?", 50);
         lines.push(`  ${row.similarity.toFixed(2)} — ${title}`);
@@ -204,7 +214,9 @@ export function redrawItemTrees(): void {
     for (const pane of panes) {
       const view = pane.itemsView;
       if (view?.refreshAndMaintainSelection) {
-        Promise.resolve(view.refreshAndMaintainSelection()).catch(() => undefined);
+        Promise.resolve(view.refreshAndMaintainSelection()).catch(
+          () => undefined,
+        );
       } else if (view?.tree?.invalidate) {
         view.tree.invalidate();
       } else if (view?.refresh) {

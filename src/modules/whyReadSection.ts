@@ -3,17 +3,14 @@
  * language (English or Simplified Chinese, pref `ui.language`).
  */
 
-import {
-  getEffectiveSimilarities,
-  isAnchor,
-} from "../services/db";
+import { getEffectiveSimilarities, isAnchor } from "../services/db";
 import { getActiveIdea, isIdeaVirtualID } from "./ideaAnchor";
 import { getActiveAnchorIDs, getRankingMode } from "./rankingMode";
 import { getPref } from "../utils/prefs";
+import { getSimilarityMethod } from "./similarity";
 
 const PANE_ID = "zotread-whyread";
 const SECTION_CSS_ID = "zotread-whyread-body";
-const METHOD = "llm-judge-v2";
 
 type Lang = "en" | "zh";
 
@@ -44,13 +41,12 @@ const STRINGS: Record<Lang, Strings> = {
       "One of your own papers — used as a reference point for ranking others.",
     noAnchors:
       "No reference papers yet. Right-click a paper → Mark as my paper, or add an idea in settings.",
-    notCompared:
-      "No score yet. Open Settings → ZotRead → Rescore all now.",
+    notCompared: "No score yet. Open Settings → ZotRead → Rescore all now.",
     closestPaperLabel: "Closest of your papers:",
     closestIdeaLabel: "Closest to your idea:",
-    similarityLabel: "Similarity:",
+    similarityLabel: "Relevance:",
     whyLabel: "Why:",
-    breakdownLabel: "Per-paper breakdown:",
+    breakdownLabel: "Other reference papers of mine:",
     quoteOpen: "“",
     quoteClose: "”",
     buckets: {
@@ -62,16 +58,15 @@ const STRINGS: Record<Lang, Strings> = {
   },
   zh: {
     notRegular: "附件或笔记不参与排序。",
-    isAnchor:
-      "这是你标记的「我的论文」——其他论文会以它为参照来打分。",
+    isAnchor: "这是你标记的「我的论文」——其他论文会以它为参照来评估。",
     noAnchors:
       "还没有参照论文。右键一篇论文选「标记为我的论文」，或在设置里填写一条研究想法。",
-    notCompared: "还没打分。请在「设置 → ZotRead → 重新打分」。",
-    closestPaperLabel: "最相关的你的论文：",
+    notCompared: "还没评估。请在「设置 → ZotRead → 重新评估」。",
+    closestPaperLabel: "我的最相关论文：",
     closestIdeaLabel: "最贴近你的研究想法：",
-    similarityLabel: "相似度：",
+    similarityLabel: "相关度：",
     whyLabel: "判断依据：",
-    breakdownLabel: "对每篇参照的打分：",
+    breakdownLabel: "对其他我的论文的相关度分析：",
     quoteOpen: "《",
     quoteClose: "》",
     buckets: {
@@ -129,20 +124,30 @@ export async function registerWhyReadSection(): Promise<void> {
       pluginID,
       header: {
         l10nID: "item-section-zotread-head-text",
-        icon: `chrome://${addonRef}/content/icons/favicon.png`,
+        icon: `chrome://${addonRef}/content/icons/favicon.svg`,
       },
       sidenav: {
         l10nID: "item-section-zotread-sidenav-tooltip",
-        icon: `chrome://${addonRef}/content/icons/favicon.png`,
+        icon: `chrome://${addonRef}/content/icons/favicon.svg`,
       },
       onRender: (data: any) =>
         renderWhyRead(data).catch((e) =>
           Zotero.debug("[ZotRead] WhyRead onRender failed: " + String(e)),
         ),
-      onItemChange: (data: any) =>
+      onItemChange: (data: any) => {
+        // Snapshot whether ZotRead is in the viewport BEFORE we trigger
+        // a render — once Zotero processes the item-change it resets
+        // scroll to the top (Info pane), so we'd lose this signal
+        // otherwise.
+        const wasVisible = isSectionInViewport(data);
         renderWhyRead(data).catch((e) =>
           Zotero.debug("[ZotRead] WhyRead onItemChange failed: " + String(e)),
-        ),
+        );
+        // Only auto-scroll back if the user was actually looking at
+        // ZotRead just now (section expanded AND on screen). If they
+        // had scrolled away to Info / Abstract / Tags, respect that.
+        if (wasVisible) bringSectionToFront(data);
+      },
     });
     registered = true;
     Zotero.debug("[ZotRead] WhyRead section registered");
@@ -166,6 +171,67 @@ interface RenderData {
   body: HTMLElement;
   doc: Document;
   item: Zotero.Item;
+}
+
+function findSection(
+  data: RenderData,
+): (HTMLElement & { open?: boolean }) | null {
+  if (!data?.body) return null;
+  return data.body.closest("collapsible-section, item-pane-custom-section") as
+    | (HTMLElement & { open?: boolean })
+    | null;
+}
+
+/**
+ * Synchronous viewport check: was the ZotRead section visible to the
+ * user right before this item-change fired?
+ *
+ * Used to decide whether to auto-scroll back to ZotRead. If the user
+ * had scrolled away (to read Info, Abstract, Tags, etc.) or collapsed
+ * the section, we DON'T want to drag them back. Only when ZotRead is
+ * the section they're actually looking at do we re-anchor to it on
+ * item navigation.
+ */
+function isSectionInViewport(data: RenderData): boolean {
+  try {
+    const section = findSection(data);
+    if (!section) return false;
+    // Collapsed sections still occupy a thin header row, so a tiny
+    // visible slice of a *closed* section shouldn't count as "user
+    // is looking at ZotRead". Require the section to be open AND
+    // have meaningful overlap with the viewport.
+    if (section.open === false) return false;
+    const win = data.doc?.defaultView ?? Zotero.getMainWindow();
+    if (!win) return false;
+    const rect = section.getBoundingClientRect();
+    const viewportH = (win as any).innerHeight ?? 0;
+    if (viewportH <= 0) return false;
+    // At least 10% of either the section or the viewport overlapping.
+    const overlapTop = Math.max(0, rect.top);
+    const overlapBottom = Math.min(viewportH, rect.bottom);
+    const overlap = Math.max(0, overlapBottom - overlapTop);
+    if (overlap <= 0) return false;
+    const minOverlap = Math.min(rect.height, viewportH) * 0.1;
+    return overlap >= minOverlap;
+  } catch (_e) {
+    return false;
+  }
+}
+
+/** Force the ZotRead section open and scroll it into view. */
+function bringSectionToFront(data: RenderData): void {
+  if (!data?.body) return;
+  const win = data.doc?.defaultView ?? Zotero.getMainWindow();
+  win?.setTimeout(() => {
+    try {
+      const section = findSection(data);
+      if (!section) return;
+      if (section.open === false) section.open = true;
+      section.scrollIntoView({ block: "start" });
+    } catch (_e) {
+      /* non-fatal */
+    }
+  }, 50);
 }
 
 async function renderWhyRead(data: RenderData): Promise<void> {
@@ -205,7 +271,11 @@ async function renderWhyRead(data: RenderData): Promise<void> {
     return;
   }
 
-  const sims = await getEffectiveSimilarities(anchorIDs, item.id, METHOD);
+  const sims = await getEffectiveSimilarities(
+    anchorIDs,
+    item.id,
+    getSimilarityMethod(),
+  );
   if (sims.size === 0) {
     setText(doc, root, s.notCompared, "#a07500");
     return;
@@ -216,10 +286,9 @@ async function renderWhyRead(data: RenderData): Promise<void> {
   );
   const [topAnchorID, topRow] = entries[0];
 
-  // Match the item-tree column: aggregated top-3 mean similarity.
-  const simValues = entries.map(([, r]) => r.similarity);
-  const topK = simValues.slice(0, Math.min(3, simValues.length));
-  const aggregatedScore = topK.reduce((a, b) => a + b, 0) / topK.length;
+  // Match the item-tree column: maximum single-anchor similarity. The
+  // top anchor's rationale below then refers to this same score.
+  const aggregatedScore = entries[0][1].similarity;
 
   // Resolve title: paper vs idea (always the anchor with the highest single sim)
   let closestLabel: string;
@@ -229,12 +298,12 @@ async function renderWhyRead(data: RenderData): Promise<void> {
     const name =
       idea?.name || (currentLang() === "zh" ? "我的研究想法" : "My idea");
     closestLabel = s.closestIdeaLabel;
-    closestValue = `${s.quoteOpen}${truncate(name, 60)}${s.quoteClose}`;
+    closestValue = truncate(name, 60);
   } else {
     const a = await Zotero.Items.getAsync(topAnchorID);
     const title = (a?.getField("title") as string) || `Item ${topAnchorID}`;
     closestLabel = s.closestPaperLabel;
-    closestValue = `${s.quoteOpen}${truncate(title, 80)}${s.quoteClose}`;
+    closestValue = truncate(title, 80);
   }
 
   const verdict = bucketFromSimilarity(aggregatedScore, s);
@@ -246,13 +315,7 @@ async function renderWhyRead(data: RenderData): Promise<void> {
     `font-weight: 600; font-size: 13px; color: ${verdict.color}; margin-bottom: 6px;`,
   );
   appendLabelValue(doc, root, closestLabel, closestValue, "color: #333;");
-  appendLabelValue(
-    doc,
-    root,
-    s.similarityLabel,
-    aggregatedScore.toFixed(2),
-    "color: #555;",
-  );
+  appendScoreWithEdit(doc, root, s, topRow, topAnchorID, item, data);
   if (topRow.rationale) {
     appendLabelValue(
       doc,
@@ -263,19 +326,16 @@ async function renderWhyRead(data: RenderData): Promise<void> {
     );
   }
 
-  if (entries.length > 1) {
-    const divider = doc.createElementNS(
-      "http://www.w3.org/1999/xhtml",
-      "div",
-    );
+  // The top anchor is already shown above (closest paper + score +
+  // rationale), so the breakdown only needs to list the *other* anchors.
+  const otherEntries = entries.filter(([id]) => id !== topAnchorID);
+  if (otherEntries.length > 0) {
+    const divider = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
     divider.setAttribute(
       "style",
       "margin-top: 10px; padding-top: 6px; border-top: 1px solid #ddd;",
     );
-    const header = doc.createElementNS(
-      "http://www.w3.org/1999/xhtml",
-      "div",
-    );
+    const header = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
     header.setAttribute(
       "style",
       "font-weight: 700; color: #666; font-size: 11px; margin-bottom: 4px;",
@@ -283,19 +343,17 @@ async function renderWhyRead(data: RenderData): Promise<void> {
     header.textContent = s.breakdownLabel;
     divider.appendChild(header);
 
-    for (const [anchorID, row] of entries) {
+    for (const [anchorID, row] of otherEntries) {
       let name: string;
       if (isIdeaVirtualID(anchorID)) {
         const idea = await getActiveIdea();
-        name = idea?.name || (currentLang() === "zh" ? "我的研究想法" : "My idea");
+        name =
+          idea?.name || (currentLang() === "zh" ? "我的研究想法" : "My idea");
       } else {
         const a = await Zotero.Items.getAsync(anchorID);
         name = (a?.getField("title") as string) || `Item ${anchorID}`;
       }
-      const line = doc.createElementNS(
-        "http://www.w3.org/1999/xhtml",
-        "div",
-      );
+      const line = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
       line.setAttribute(
         "style",
         "margin: 3px 0; color: #555; font-size: 11px;",
@@ -345,13 +403,11 @@ async function renderWhyRead(data: RenderData): Promise<void> {
             Zotero.debug("[ZotRead] override reset failed: " + String(e));
           }
         } else {
-          const win =
-            (data.doc as any)?.defaultView ??
-            Zotero.getMainWindow();
+          const win = (data.doc as any)?.defaultView ?? Zotero.getMainWindow();
           const promptText =
             currentLang() === "zh"
-              ? `输入修正后的相似度（0.0 – 1.0），当前 ${row.similarity.toFixed(2)}：`
-              : `Enter overridden similarity (0.0 – 1.0). Current: ${row.similarity.toFixed(2)}`;
+              ? `输入修正后的相关度（0.0 – 1.0），当前 ${row.similarity.toFixed(2)}：`
+              : `Enter overridden relevance score (0.0 – 1.0). Current: ${row.similarity.toFixed(2)}`;
           const ans = (win as any)?.prompt?.(
             promptText,
             row.similarity.toFixed(2),
@@ -361,7 +417,7 @@ async function renderWhyRead(data: RenderData): Promise<void> {
           if (!Number.isFinite(num)) return;
           try {
             const { api } = await import("../api");
-            await api.setScoreOverride(item.id, anchorID, num, "user");
+            await api.setScoreOverride(item.id, anchorID, num);
             await renderWhyRead(data);
           } catch (e) {
             Zotero.debug("[ZotRead] override save failed: " + String(e));
@@ -371,10 +427,7 @@ async function renderWhyRead(data: RenderData): Promise<void> {
       line.appendChild(overrideLink);
 
       if (row.rationale) {
-        const rat = doc.createElementNS(
-          "http://www.w3.org/1999/xhtml",
-          "div",
-        );
+        const rat = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
         rat.setAttribute(
           "style",
           "margin-left: 40px; color: #888; font-style: italic; font-size: 10px;",
@@ -408,6 +461,83 @@ function appendPara(
   p.setAttribute("style", `margin: 2px 0; ${style}`);
   p.textContent = text;
   parent.appendChild(p);
+}
+
+/**
+ * Render a "Relevance: 0.85 [edit/reset]" row that lets the user override
+ * the top-anchor score directly from the WhyRead pane (instead of
+ * scrolling down to the breakdown).
+ */
+function appendScoreWithEdit(
+  doc: Document,
+  parent: Element,
+  s: Strings,
+  topRow: any,
+  topAnchorID: number,
+  item: Zotero.Item,
+  data: RenderData,
+): void {
+  const lang = currentLang();
+  const isOverride = topRow?.anchorContentHash === "(override)";
+  const row = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
+  row.setAttribute("style", "margin: 2px 0; color: #555;");
+
+  const lbl = doc.createElementNS("http://www.w3.org/1999/xhtml", "span");
+  lbl.setAttribute("style", "font-weight: 700;");
+  lbl.textContent = s.similarityLabel + " ";
+
+  const val = doc.createElementNS("http://www.w3.org/1999/xhtml", "span");
+  val.textContent = (topRow?.similarity ?? 0).toFixed(2);
+
+  const link = doc.createElementNS("http://www.w3.org/1999/xhtml", "a");
+  link.setAttribute(
+    "style",
+    "margin-left: 10px; font-size: 11px; cursor: pointer; color: #3a7bd5; text-decoration: underline;",
+  );
+  link.textContent = isOverride
+    ? lang === "zh"
+      ? "重置"
+      : "reset"
+    : lang === "zh"
+      ? "修正分数"
+      : "edit";
+  link.addEventListener("click", async (ev: Event) => {
+    ev.preventDefault();
+    if (isOverride) {
+      try {
+        const { api } = await import("../api");
+        await api.clearScoreOverride(item.id, topAnchorID);
+        await renderWhyRead(data);
+      } catch (e) {
+        Zotero.debug("[ZotRead] override reset failed: " + String(e));
+      }
+      return;
+    }
+    const win = (data.doc as any)?.defaultView ?? Zotero.getMainWindow();
+    const promptText =
+      lang === "zh"
+        ? `输入修正后的相关度（0.0 – 1.0），当前 ${(topRow?.similarity ?? 0).toFixed(2)}：`
+        : `Enter overridden relevance score (0.0 – 1.0). Current: ${(topRow?.similarity ?? 0).toFixed(2)}`;
+    const ans = (win as any)?.prompt?.(
+      promptText,
+      (topRow?.similarity ?? 0).toFixed(2),
+    );
+    if (ans === null || ans === undefined) return;
+    const num = parseFloat(String(ans).trim());
+    if (!Number.isFinite(num)) return;
+    try {
+      const { api } = await import("../api");
+      await api.setScoreOverride(item.id, topAnchorID, num);
+      await renderWhyRead(data);
+    } catch (e) {
+      Zotero.debug("[ZotRead] override save failed: " + String(e));
+    }
+  });
+
+  row.appendChild(lbl);
+  row.appendChild(val);
+  row.appendChild(link);
+  parent.appendChild(row);
 }
 
 function appendLabelValue(

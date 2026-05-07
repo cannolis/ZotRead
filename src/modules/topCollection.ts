@@ -68,7 +68,11 @@ async function getOrCreateCollection(
 ): Promise<Zotero.Collection | null> {
   const libID = Zotero.Libraries.userLibraryID;
   const all = Zotero.Collections.getByLibrary(libID, true);
-  const found = all.find((c) => c.name === name && c.parentID == null);
+  // Zotero's `parentID` for a root-level collection is `false`, not `null`,
+  // so `parentID == null` (loose) does NOT match — it would silently fail
+  // and create a new collection on every rescore. Use `!c.parentID` to
+  // accept all falsy values (false / null / undefined / 0).
+  const found = all.find((c) => c.name === name && !c.parentID);
   if (found) return found;
 
   // Create at user library root.

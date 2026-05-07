@@ -1,5 +1,4 @@
 import { chatJSON } from "../services/llm";
-import { getPref } from "../utils/prefs";
 
 /**
  * Triager — ask the LLM to judge whether a paper deserves the user's
@@ -83,7 +82,10 @@ function buildPrompt(snap: ItemSnapshot, focus: string): string {
 
 export async function triageItem(item: Zotero.Item): Promise<TriageVerdict> {
   const snap = snapshotItem(item);
-  const focus = (getPref("researchFocus") as string) || "";
+  // researchFocus pref was removed — pass empty focus. The triager API is
+  // only used from dev console; if you need it, re-add the pref or pass
+  // focus explicitly when calling triageItem.
+  const focus = "";
   const prompt = buildPrompt(snap, focus);
   Zotero.debug(
     `[ZotRead] triageItem ${snap.itemID} "${snap.title.slice(0, 80)}"`,

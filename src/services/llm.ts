@@ -4,6 +4,7 @@ import { getPref } from "../utils/prefs";
  * OpenAI-compatible chat completion client.
  *
  * Designed to work with any OpenAI-compatible endpoint:
+ *   - DeepSeek:    baseURL = https://api.deepseek.com    (default)
  *   - OpenRouter:  baseURL = https://openrouter.ai/api/v1
  *   - OpenAI:      baseURL = https://api.openai.com/v1
  *   - Local Ollama: baseURL = http://localhost:11434/v1
@@ -121,7 +122,10 @@ export async function chat(
   } catch (e) {
     const msg = String(e);
     // Don't double-toast errors we already surfaced above.
-    if (!msg.startsWith("Error: LLM error:") && !msg.includes("empty response")) {
+    if (
+      !msg.startsWith("Error: LLM error:") &&
+      !msg.includes("empty response")
+    ) {
       maybeToastError(msg.slice(0, 120));
     }
     throw e;
@@ -132,7 +136,10 @@ export async function chatJSON<T>(
   messages: ChatMessage[],
   options: LLMCallOptions = {},
 ): Promise<T> {
-  const raw = await chat(messages, { ...options, responseFormat: "json_object" });
+  const raw = await chat(messages, {
+    ...options,
+    responseFormat: "json_object",
+  });
   // Defensive: some providers wrap or add markdown fences
   const cleaned = raw
     .replace(/^```(?:json)?\s*/i, "")

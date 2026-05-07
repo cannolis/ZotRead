@@ -33,12 +33,7 @@ export interface SimilarityRow {
   createdAt: number;
 }
 
-export type ItemStatus =
-  | "unread"
-  | "reading"
-  | "read"
-  | "skipped"
-  | "archived";
+export type ItemStatus = "unread" | "reading" | "read" | "skipped" | "archived";
 
 export interface StatusRow {
   itemID: number;
@@ -124,10 +119,12 @@ export async function getSummary(itemID: number): Promise<SummaryRow | null> {
   return row || null;
 }
 
-export async function saveSummary(row: Omit<SummaryRow, "createdAt" | "updatedAt"> & {
-  createdAt?: number;
-  updatedAt?: number;
-}): Promise<void> {
+export async function saveSummary(
+  row: Omit<SummaryRow, "createdAt" | "updatedAt"> & {
+    createdAt?: number;
+    updatedAt?: number;
+  },
+): Promise<void> {
   await ensureSchema();
   const now = Date.now();
   await Zotero.DB.queryAsync(
@@ -148,10 +145,9 @@ export async function saveSummary(row: Omit<SummaryRow, "createdAt" | "updatedAt
 
 export async function deleteSummary(itemID: number): Promise<void> {
   await ensureSchema();
-  await Zotero.DB.queryAsync(
-    `DELETE FROM zotread_summary WHERE itemID = ?`,
-    [itemID],
-  );
+  await Zotero.DB.queryAsync(`DELETE FROM zotread_summary WHERE itemID = ?`, [
+    itemID,
+  ]);
 }
 
 // ── anchor ─────────────────────────────────────────────────────────
@@ -184,10 +180,9 @@ export async function addAnchor(itemID: number, note?: string): Promise<void> {
 
 export async function removeAnchor(itemID: number): Promise<void> {
   await ensureSchema();
-  await Zotero.DB.queryAsync(
-    `DELETE FROM zotread_anchor WHERE itemID = ?`,
-    [itemID],
-  );
+  await Zotero.DB.queryAsync(`DELETE FROM zotread_anchor WHERE itemID = ?`, [
+    itemID,
+  ]);
 }
 
 // ── similarity ─────────────────────────────────────────────────────
@@ -206,9 +201,11 @@ export async function getSimilarity(
   return row || null;
 }
 
-export async function saveSimilarity(row: Omit<SimilarityRow, "createdAt"> & {
-  createdAt?: number;
-}): Promise<void> {
+export async function saveSimilarity(
+  row: Omit<SimilarityRow, "createdAt"> & {
+    createdAt?: number;
+  },
+): Promise<void> {
   await ensureSchema();
   await Zotero.DB.queryAsync(
     `INSERT OR REPLACE INTO zotread_similarity
@@ -399,23 +396,35 @@ export async function getEffectiveSimilarities(
   } else {
     // Fallback: candidate has no summary yet; use the legacy itemID-keyed
     // lookup so a partially populated DB still returns something.
-    const legacy = await getSimilarityMap(anchorItemIDs, candidateItemID, method);
+    const legacy = await getSimilarityMap(
+      anchorItemIDs,
+      candidateItemID,
+      method,
+    );
     for (const [k, v] of legacy) map.set(k, v);
   }
 
-  // Apply user overrides on top.
+  // Apply user overrides on top — but only the *score* changes; the
+  // rationale and role stay from the original LLM evaluation. The
+  // user is correcting our number, not rewriting the explanation.
   const overrides = await getOverridesFor(candidateItemID);
   for (const [anchorID, ov] of overrides) {
     if (!anchorItemIDs.includes(anchorID)) continue;
+    const existing = map.get(anchorID);
     map.set(anchorID, {
       anchorItemID: anchorID,
       candidateItemID,
+      // "(override)" sentinel kept so the UI can mark this row as
+      // user-modified (e.g. swap "edit" → "reset" link).
       anchorContentHash: "(override)",
       candidateContentHash: "(override)",
       method,
       similarity: ov.similarity,
-      rationale: ov.note,
-      role: "same-problem",
+      rationale:
+        existing?.rationale && existing.rationale.trim()
+          ? existing.rationale
+          : (ov.note ?? ""),
+      role: existing?.role ?? "same-problem",
       createdAt: ov.updatedAt,
     });
   }

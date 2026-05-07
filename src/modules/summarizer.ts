@@ -37,22 +37,37 @@ export async function ensureSummary(
   opts: { force?: boolean } = {},
 ): Promise<SummaryRecord> {
   const extracted = await extractForSummary(item);
-  const contentHash = await sha256Hex(extracted.full || extracted.title || "");
+  // Hash only the *stable* content (title + abstract), NOT the PDF
+  // introduction. PDF extraction is non-deterministic across runs:
+  // Zotero may not have indexed the PDF the first time, then index it
+  // later, which silently changes `extracted.full` and invalidates
+  // every cached summary + every cached pairwise similarity. The user
+  // sees this as "no caching — every rescore re-hits the LLM".
+  // title+abstract are user-editable and rarely change, giving a
+  // stable cache key.
+  const stable = `${extracted.title}\n${extracted.abstract}`.trim();
+  const contentHash = await sha256Hex(stable || extracted.full || "");
   const { model } = readConfig();
 
   if (!opts.force) {
     const cached = await getSummary(item.id);
-    if (cached && cached.contentHash === contentHash && cached.model === model) {
+    if (cached && cached.contentHash === contentHash) {
+      Zotero.debug(
+        `[ZotRead/summary] HIT item=${item.id} hash=${contentHash.slice(0, 12)}`,
+      );
       return {
         itemID: item.id,
         title: extracted.title,
         source: extracted.source,
         summary: parseSummary(cached),
         contentHash,
-        model,
+        model: cached.model || model,
         cached: true,
       };
     }
+    Zotero.debug(
+      `[ZotRead/summary] MISS item=${item.id} cached=${cached ? cached.contentHash.slice(0, 12) : "(none)"} current=${contentHash.slice(0, 12)} stableLen=${stable.length}`,
+    );
   }
 
   if (!extracted.full) {
@@ -111,7 +126,10 @@ function normalizeSummary(raw: Partial<PaperSummary>): PaperSummary {
     finding: trim(raw.finding),
     domain: trim(raw.domain),
     keyTerms: Array.isArray(raw.keyTerms)
-      ? raw.keyTerms.slice(0, 8).map((t) => String(t).trim()).filter(Boolean)
+      ? raw.keyTerms
+          .slice(0, 8)
+          .map((t) => String(t).trim())
+          .filter(Boolean)
       : [],
   };
 }
@@ -142,7 +160,7 @@ async function generateSummary(sourceText: string): Promise<PaperSummary> {
 
   const raw = await chatJSON<Partial<PaperSummary>>(
     [{ role: "user", content: prompt }],
-    { temperature: 0, maxTokens: 500, seed: 42 },
+    { temperature: 0, maxTokens: 1500, seed: 42 },
   );
   return normalizeSummary(raw);
 }

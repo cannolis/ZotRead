@@ -8,16 +8,37 @@ import {
   listIdeas,
   updateIdea,
 } from "../services/db";
-import {
-  clearIdeaCache,
-  getActiveIdeaID,
-  setActiveIdeaID,
-} from "./ideaAnchor";
+import { clearIdeaCache, getActiveIdeaID, setActiveIdeaID } from "./ideaAnchor";
 import { refreshScoreMap } from "./scoreColumn";
 import { refreshStatusMap } from "./statusColumn";
-import { ProgressToast, toastError, toastSuccess } from "./toast";
+import { toastError, toastSuccess } from "./toast";
 import { getStats } from "./stats";
 import { getPref } from "../utils/prefs";
+
+type Lang = "en" | "zh";
+
+/**
+ * Resolve display language. Priority: explicit pref → Zotero locale → en.
+ * Mirrors whyReadSection.ts so the prefs pane and the WhyRead pane render
+ * the same language regardless of which one the user opens first.
+ */
+function currentLang(): Lang {
+  const v = ((getPref("ui.language") as string) || "").toLowerCase().trim();
+  if (v === "zh") return "zh";
+  if (v === "en") return "en";
+  try {
+    const loc = (Zotero.locale as string) || "";
+    if (loc.toLowerCase().startsWith("zh")) return "zh";
+  } catch (_e) {
+    /* non-fatal */
+  }
+  return "en";
+}
+
+/** Pick the right string for the active language. */
+function tx(zh: string, en: string): string {
+  return currentLang() === "zh" ? zh : en;
+}
 
 /**
  * ZotRead preferences pane handler.
@@ -48,17 +69,26 @@ async function buildScopePicker(prefsWindow: Window): Promise<void> {
   const doc = prefsWindow.document;
   const r = config.addonRef;
   const picker = doc.getElementById(`zotero-prefpane-${r}-scope-picker`) as any;
-  const popup = doc.getElementById(
-    `zotero-prefpane-${r}-scope-picker-popup`,
-  );
+  const popup = doc.getElementById(`zotero-prefpane-${r}-scope-picker-popup`);
   if (!picker || !popup) return;
 
   while (popup.firstChild) popup.removeChild(popup.firstChild);
 
+  // Empty-label placeholder so the menulist shows blank when no scope is
+  // selected, instead of a parenthetical instruction.
   const none = doc.createXULElement("menuitem");
-  none.setAttribute("label", "(global — entire library)");
+  none.setAttribute("label", "");
   none.setAttribute("value", "0");
   popup.appendChild(none);
+
+  // Whole-library option (encoded as -1 in the pref).
+  const wholeLib = doc.createXULElement("menuitem");
+  wholeLib.setAttribute(
+    "label",
+    tx("我的文库（全部论文）", "My library (all items)"),
+  );
+  wholeLib.setAttribute("value", "-1");
+  popup.appendChild(wholeLib);
 
   const libID = Zotero.Libraries.userLibraryID;
   const collections = Zotero.Collections.getByLibrary(libID, true);
@@ -118,29 +148,26 @@ async function renderStatsPanel(prefsWindow: Window): Promise<void> {
     return;
   }
 
-  const lang =
-    ((getPref("ui.language") as string) || "").toLowerCase() === "zh"
-      ? "zh"
-      : "en";
+  const lang = currentLang();
   const labels =
     lang === "zh"
       ? {
-          anchors: "我的论文（anchor）",
-          ideas: "已保存的研究想法",
-          summaries: "已生成的论文摘要",
-          similarities: "已计算的成对相似度",
-          read: "已读论文",
-          reading: "正在读",
+          anchors: "我的论文",
+          ideas: "研究想法",
+          summaries: "论文摘要",
+          similarities: "相关度对",
+          read: "已读",
+          reading: "在读",
           week: "本周读完",
           month: "本月读完",
         }
       : {
-          anchors: "Anchors (my papers)",
-          ideas: "Saved ideas",
-          summaries: "Cached summaries",
-          similarities: "Cached pairwise scores",
-          read: "Total read",
-          reading: "Currently reading",
+          anchors: "My papers",
+          ideas: "Ideas",
+          summaries: "Summaries",
+          similarities: "Pairwise scores",
+          read: "Read",
+          reading: "Reading",
           week: "Read this week",
           month: "Read this month",
         };
@@ -222,87 +249,345 @@ async function renderStatusBanner(prefsWindow: Window): Promise<void> {
   root.appendChild(wrap);
 }
 
+interface RescorePreview {
+  scopeName: string;
+  candidateCount: number;
+  anchorCount: number;
+  mode: "papers" | "idea";
+}
+
+async function buildRescorePreview(): Promise<
+  { ok: true; preview: RescorePreview } | { ok: false; reason: string }
+> {
+  const lang = currentLang();
+  const r = config.addonRef;
+  const scopeID =
+    ((Zotero.Prefs.get(
+      `extensions.zotero.${r}.ranking.scopeCollectionID`,
+      true,
+    ) as number | undefined) ?? 0) | 0;
+
+  if (scopeID === 0) {
+    return {
+      ok: false,
+      reason:
+        lang === "zh"
+          ? "请先在上方「排序范围」选一个集合或「我的文库」，再点重新评估。"
+          : 'Pick a collection or "My library" under "Ranking scope" first, then rescore.',
+    };
+  }
+
+  let scopeName: string;
+  let candidateCount: number;
+  if (scopeID < 0) {
+    // -1 means whole user library
+    const libID = Zotero.Libraries.userLibraryID;
+    const ids = await Zotero.Items.getAllIDs(libID);
+    const items = await Zotero.Items.getAsync(ids);
+    candidateCount = items.filter((it) => it && it.isRegularItem()).length;
+    scopeName =
+      lang === "zh" ? "我的文库（全部论文）" : "My library (all items)";
+  } else {
+    const coll = Zotero.Collections.get(scopeID) as
+      | Zotero.Collection
+      | false
+      | undefined;
+    if (!coll) {
+      return {
+        ok: false,
+        reason:
+          lang === "zh"
+            ? `选中的集合 #${scopeID} 已不存在。请重新选择。`
+            : `Selected collection #${scopeID} no longer exists. Pick another.`,
+      };
+    }
+    const items = coll.getChildItems() ?? [];
+    candidateCount = items.filter((it) => it && it.isRegularItem()).length;
+    scopeName = coll.name || `Collection #${scopeID}`;
+  }
+
+  const { getActiveAnchorIDs, getRankingMode } = await import("./rankingMode");
+  const anchorIDs = await getActiveAnchorIDs();
+  const mode = getRankingMode();
+
+  return {
+    ok: true,
+    preview: {
+      scopeName,
+      candidateCount,
+      anchorCount: anchorIDs.length,
+      mode,
+    },
+  };
+}
+
+function formatPreviewMessage(p: RescorePreview): string {
+  const lang = currentLang();
+  const calls = p.candidateCount * p.anchorCount;
+
+  if (lang === "zh") {
+    return (
+      `即将对集合「${p.scopeName}」重新评估。\n\n` +
+      `候选论文：${p.candidateCount} 篇\n` +
+      `参照（${p.mode === "idea" ? "研究想法" : "我的论文"}）：${p.anchorCount} 个\n` +
+      `最多 API 调用：${calls.toLocaleString()} 次（已缓存的对会跳过，实际更少）\n\n` +
+      `评估过程中可随时点「停止评估」中断。\n\n` +
+      `继续吗？`
+    );
+  }
+  return (
+    `Ready to rescore collection "${p.scopeName}".\n\n` +
+    `Candidate papers: ${p.candidateCount}\n` +
+    `Anchors (${p.mode === "idea" ? "research idea" : "my papers"}): ${p.anchorCount}\n` +
+    `Max API calls: ${calls.toLocaleString()} (cached pairs are skipped, actual fewer)\n\n` +
+    `You can press "Stop scoring" any time to interrupt.\n\n` +
+    `Proceed?`
+  );
+}
+
+/**
+ * Close the prefs window, open a standalone modeless progress dialog, and
+ * run the rescore there. The dialog has its own progress bar + stop
+ * button so the user always sees them — the prefs pane was unreliable
+ * because it could be obscured or the inline elements didn't repaint.
+ */
+function runRescoreInDialog(prefsWindow: Window): void {
+  const lang = currentLang();
+  const mainWin = Zotero.getMainWindow();
+  const url = `chrome://${addon.data.config.addonRef}/content/rescoreProgress.xhtml`;
+
+  // Open the dialog *before* closing prefs — prefsWindow.openDialog keeps
+  // the new window alive even after prefs closes. Use main Zotero window
+  // as the opener so the progress dialog persists independently.
+  const progressWin = (mainWin as any).openDialog(
+    url,
+    "_blank",
+    "chrome,centerscreen,resizable=no,dialog=no,minimizable=no,width=480,height=180",
+  );
+  if (!progressWin) {
+    toastError(tx("无法打开进度窗口", "Could not open progress window"));
+    return;
+  }
+
+  // Close prefs after the dialog exists, so user sees progress immediately.
+  try {
+    (prefsWindow as any).close?.();
+  } catch (_e) {
+    /* ignore */
+  }
+
+  const onLoad = () => {
+    const pdoc = progressWin.document;
+    const titleEl = pdoc.getElementById("title");
+    const barEl = pdoc.getElementById("bar") as HTMLProgressElement | null;
+    const statusEl = pdoc.getElementById("status");
+    const stopBtn = pdoc.getElementById("stop") as HTMLButtonElement | null;
+    if (titleEl) {
+      titleEl.textContent =
+        lang === "zh" ? "ZotRead — 评估中" : "ZotRead — Rescoring…";
+    }
+    if (statusEl) {
+      statusEl.textContent = lang === "zh" ? "准备中…" : "Preparing…";
+    }
+    if (stopBtn) {
+      stopBtn.textContent = lang === "zh" ? "停止评估" : "Stop";
+    }
+    pdoc.title = lang === "zh" ? "ZotRead 评估" : "ZotRead Rescoring";
+
+    // AbortController is not a chrome-global in Zotero 9 / Firefox 140 ESR;
+    // grab it from the Zotero main window (which is a real Web window).
+    const AbortCtrl =
+      (globalThis as any).AbortController ||
+      (Zotero.getMainWindow() as any).AbortController ||
+      (progressWin as any).AbortController;
+    const controller: AbortController = new AbortCtrl();
+    let finished = false;
+
+    stopBtn?.addEventListener("click", () => {
+      if (finished) {
+        progressWin.close();
+        return;
+      }
+      controller.abort();
+      stopBtn.disabled = true;
+      stopBtn.textContent = lang === "zh" ? "正在停止…" : "Stopping…";
+    });
+
+    // Also abort on window close (user clicks X)
+    progressWin.addEventListener("unload", () => {
+      if (!finished) controller.abort();
+    });
+
+    const run = async () => {
+      try {
+        const { api } = await import("../api");
+        const report = await api.rescoreAll({
+          signal: controller.signal,
+          onProgress: (p) => {
+            if (barEl) {
+              barEl.max = 100;
+              barEl.value =
+                p.total > 0 ? Math.floor((p.done / p.total) * 100) : 0;
+            }
+            if (statusEl) {
+              statusEl.textContent =
+                lang === "zh"
+                  ? `${p.done}/${p.total} · ${truncate(p.title, 48)}`
+                  : `${p.done}/${p.total} · ${truncate(p.title, 48)}`;
+            }
+          },
+        });
+        finished = true;
+        if (controller.signal.aborted) {
+          if (statusEl)
+            statusEl.textContent =
+              lang === "zh"
+                ? `■ 已停止，共评估 ${report.ranked} 篇`
+                : `■ Stopped — ${report.ranked} items scored`;
+        } else {
+          if (barEl) barEl.value = 100;
+          if (statusEl)
+            statusEl.textContent =
+              lang === "zh"
+                ? `✓ 完成，共评估 ${report.ranked} 篇`
+                : `✓ Done — ${report.ranked} items scored`;
+        }
+        if (stopBtn) {
+          stopBtn.disabled = false;
+          stopBtn.textContent = lang === "zh" ? "关闭" : "Close";
+        }
+      } catch (e) {
+        finished = true;
+        if (statusEl)
+          statusEl.textContent =
+            lang === "zh"
+              ? `✗ 评估失败：${String(e).slice(0, 100)}`
+              : `✗ Failed: ${String(e).slice(0, 100)}`;
+        if (stopBtn) {
+          stopBtn.disabled = false;
+          stopBtn.textContent = lang === "zh" ? "关闭" : "Close";
+        }
+      }
+    };
+    run();
+  };
+
+  if (progressWin.document.readyState === "complete") {
+    onLoad();
+  } else {
+    progressWin.addEventListener("load", onLoad, { once: true });
+  }
+}
+
+function confirmDialog(prefsWindow: Window, message: string): boolean {
+  try {
+    const win = prefsWindow as any;
+    const Services = win.Services || (globalThis as any).Services;
+    if (Services?.prompt?.confirm) {
+      return Services.prompt.confirm(win, "ZotRead", message);
+    }
+    return win.confirm(message);
+  } catch (_e) {
+    return (prefsWindow as any).confirm?.(message) ?? false;
+  }
+}
+
 function bindMaintenanceButtons(prefsWindow: Window): void {
   const doc = prefsWindow.document;
   const r = config.addonRef;
-  const buttons = [
-    {
-      rescore: doc.getElementById(`zotero-prefpane-${r}-rescore-now`),
-      clear: doc.getElementById(`zotero-prefpane-${r}-clear-cache`),
-      status: doc.getElementById(`zotero-prefpane-${r}-maint-status`),
-    },
-    {
-      rescore: doc.getElementById(`zotero-prefpane-${r}-rescore-now-top`),
-      clear: doc.getElementById(`zotero-prefpane-${r}-clear-cache-top`),
-      status: doc.getElementById(`zotero-prefpane-${r}-maint-status-top`),
-    },
-  ];
+  const rescoreBtn = doc.getElementById(`zotero-prefpane-${r}-rescore-now-top`);
+  const clearBtn = doc.getElementById(`zotero-prefpane-${r}-clear-cache-top`);
+  const statusLabel = doc.getElementById(
+    `zotero-prefpane-${r}-maint-status-top`,
+  );
 
   const setStatusLabel = (text: string) => {
-    for (const b of buttons) {
-      if (!b.status) continue;
-      b.status.setAttribute("value", text);
-      (b.status as any).textContent = text;
-    }
+    if (!statusLabel) return;
+    statusLabel.removeAttribute("value");
+    (statusLabel as any).textContent = text;
   };
 
-  // Wire both copies of the buttons (top + bottom).
-  const rescoreBtn = {
-    addEventListener: (
-      type: string,
-      handler: (ev: Event) => void,
-    ) => {
-      for (const b of buttons) {
-        b.rescore?.addEventListener(type, handler);
-      }
-    },
-  } as { addEventListener: (t: string, h: (ev: Event) => void) => void };
-  const clearBtn = {
-    addEventListener: (
-      type: string,
-      handler: (ev: Event) => void,
-    ) => {
-      for (const b of buttons) {
-        b.clear?.addEventListener(type, handler);
-      }
-    },
-  } as { addEventListener: (t: string, h: (ev: Event) => void) => void };
-
-  rescoreBtn.addEventListener("command", async () => {
-    setStatusLabel("Rescoring…");
-    const pt = new ProgressToast(
-      "ZotRead",
-      "Rescoring all items…",
-    ).start();
-    try {
-      const { api } = await import("../api");
-      const report = await api.rescoreAll({
-        onProgress: (p) =>
-          pt.update(
-            Math.floor((p.done / Math.max(p.total, 1)) * 100),
-            `Scoring ${p.done}/${p.total}: ${truncate(p.title, 48)}`,
-          ),
-      });
-      pt.finish(`Done — ${report.ranked} items ranked`);
-      setStatusLabel(`✓ Ranked ${report.ranked} items`);
-    } catch (e) {
-      pt.finish(`Rescore failed: ${String(e).slice(0, 100)}`, "fail");
-      setStatusLabel(`✗ ${String(e).slice(0, 120)}`);
+  rescoreBtn?.addEventListener("command", async () => {
+    const result = await buildRescorePreview();
+    if (!result.ok) {
+      setStatusLabel(`⚠ ${result.reason}`);
+      toastError(result.reason);
+      return;
     }
+    if (result.preview.candidateCount === 0) {
+      setStatusLabel(
+        tx(
+          "⚠ 所选集合内没有正式条目",
+          "⚠ Selected collection has no regular items",
+        ),
+      );
+      return;
+    }
+    if (result.preview.anchorCount === 0) {
+      setStatusLabel(
+        tx(
+          "⚠ 尚未配置我的论文或研究想法，请先添加",
+          "⚠ No anchors / research idea configured. Add one first.",
+        ),
+      );
+      return;
+    }
+    if (!confirmDialog(prefsWindow, formatPreviewMessage(result.preview))) {
+      setStatusLabel(tx("已取消评估", "Rescore canceled"));
+      return;
+    }
+
+    // Close the prefs window and run the rescore in a standalone modeless
+    // dialog so the user can clearly see progress and the Stop button.
+    runRescoreInDialog(prefsWindow);
   });
 
   clearBtn?.addEventListener("command", async () => {
+    // Read counts up-front so the confirm dialog can warn the user
+    // exactly how much they're about to lose.
+    let stats;
+    try {
+      stats = await getStats();
+    } catch (_e) {
+      stats = { summaries: 0, similarities: 0 } as Awaited<
+        ReturnType<typeof getStats>
+      >;
+    }
+    const message = tx(
+      `确定要清空所有缓存吗？\n\n` +
+        `这将删除 ${stats.summaries} 条论文摘要和 ${stats.similarities} 条相关度评估。\n\n` +
+        `无法恢复，下次重新评估时需要重新调用 API。`,
+      `Clear all cached data?\n\n` +
+        `This will delete ${stats.summaries} paper summaries and ${stats.similarities} relevance scores.\n\n` +
+        `Cannot be undone — the next rescore will hit the API again.`,
+    );
+    if (!confirmDialog(prefsWindow, message)) {
+      setStatusLabel(tx("已取消", "Canceled"));
+      return;
+    }
+
     try {
       const result = await clearAllCache();
       await Promise.all([refreshScoreMap(), refreshStatusMap()]);
       toastSuccess(
-        `Cleared ${result.summaries} summaries + ${result.similarities} similarity rows`,
+        tx(
+          `已清空：${result.summaries} 条摘要 + ${result.similarities} 条相关度`,
+          `Cleared ${result.summaries} summaries + ${result.similarities} similarity rows`,
+        ),
       );
       setStatusLabel(
-        `✓ Cleared ${result.summaries} summaries, ${result.similarities} similarities`,
+        tx(
+          `✓ 已清空 ${result.summaries} 条摘要、${result.similarities} 条相关度`,
+          `✓ Cleared ${result.summaries} summaries, ${result.similarities} similarities`,
+        ),
       );
     } catch (e) {
-      toastError(`Clear cache failed: ${String(e).slice(0, 120)}`);
+      toastError(
+        tx(
+          `清空缓存失败：${String(e).slice(0, 120)}`,
+          `Clear cache failed: ${String(e).slice(0, 120)}`,
+        ),
+      );
       setStatusLabel(`✗ ${String(e).slice(0, 120)}`);
     }
   });
@@ -361,10 +646,28 @@ function getIdeaRefs(doc: Document): IdeaUIRefs | null {
   const newBtn = q(`zotero-prefpane-${r}-idea-new`);
   const deleteBtn = q(`zotero-prefpane-${r}-idea-delete`);
   const statusLabel = q(`zotero-prefpane-${r}-idea-status`);
-  if (!picker || !popup || !nameInput || !textInput || !saveBtn || !newBtn || !deleteBtn || !statusLabel) {
+  if (
+    !picker ||
+    !popup ||
+    !nameInput ||
+    !textInput ||
+    !saveBtn ||
+    !newBtn ||
+    !deleteBtn ||
+    !statusLabel
+  ) {
     return null;
   }
-  return { picker: picker as any, popup, nameInput, textInput, saveBtn, newBtn, deleteBtn, statusLabel };
+  return {
+    picker: picker as any,
+    popup,
+    nameInput,
+    textInput,
+    saveBtn,
+    newBtn,
+    deleteBtn,
+    statusLabel,
+  };
 }
 
 async function buildIdeaUI(prefsWindow: Window): Promise<void> {
@@ -391,7 +694,10 @@ async function buildIdeaUI(prefsWindow: Window): Promise<void> {
     refs.nameInput.value = "";
     refs.textInput.value = "";
     refs.picker.value = "0";
-    setStatus(refs, "请填写名称与正文，再点「Save」保存");
+    setStatus(
+      refs,
+      tx("请填写名称与正文后保存。", "Fill in the name and text, then save."),
+    );
     refs.nameInput.focus?.();
   });
 
@@ -404,19 +710,16 @@ async function buildIdeaUI(prefsWindow: Window): Promise<void> {
   });
 }
 
-async function rebuildPicker(
-  doc: Document,
-  refs: IdeaUIRefs,
-): Promise<void> {
+async function rebuildPicker(doc: Document, refs: IdeaUIRefs): Promise<void> {
   const { popup, picker } = refs;
   while (popup.firstChild) popup.removeChild(popup.firstChild);
 
   const ideas = await listIdeas();
   const activeID = getActiveIdeaID();
 
-  // "(none)" option
+  // Blank placeholder so the menulist shows nothing when no idea is active.
   const none = doc.createXULElement("menuitem");
-  none.setAttribute("label", "(none — no active idea)");
+  none.setAttribute("label", "");
   none.setAttribute("value", "0");
   popup.appendChild(none);
 
@@ -440,34 +743,43 @@ async function loadIdeaIntoEditor(
   if (!ideaID) {
     refs.nameInput.value = "";
     refs.textInput.value = "";
-    setStatus(refs, "无激活 idea。点击「New」创建。");
+    setStatus(
+      refs,
+      tx(
+        "尚无激活的研究想法。点击「新建」创建一条。",
+        'No active research idea. Click "New" to create one.',
+      ),
+    );
     return;
   }
   const idea = await getIdea(ideaID);
   if (!idea) {
-    setStatus(refs, `Idea #${ideaID} 不存在`);
+    setStatus(
+      refs,
+      tx(`研究想法 #${ideaID} 不存在`, `Research idea #${ideaID} not found`),
+    );
     return;
   }
   refs.nameInput.value = idea.name;
   refs.textInput.value = idea.text;
   setStatus(
     refs,
-    `Active: #${idea.ideaID} ${idea.name} · ${idea.text.length} chars`,
+    tx(
+      `已激活 #${idea.ideaID} ${idea.name} · ${idea.text.length} 字`,
+      `Active: #${idea.ideaID} ${idea.name} · ${idea.text.length} chars`,
+    ),
   );
 }
 
-async function saveCurrentIdea(
-  doc: Document,
-  refs: IdeaUIRefs,
-): Promise<void> {
+async function saveCurrentIdea(doc: Document, refs: IdeaUIRefs): Promise<void> {
   const name = refs.nameInput.value.trim();
   const text = refs.textInput.value.trim();
   if (!name) {
-    setStatus(refs, "⚠ 名称不能为空");
+    setStatus(refs, tx("⚠ 名称不能为空", "⚠ Name cannot be empty"));
     return;
   }
   if (!text) {
-    setStatus(refs, "⚠ 正文不能为空");
+    setStatus(refs, tx("⚠ 正文不能为空", "⚠ Text cannot be empty"));
     return;
   }
   const current = String(refs.picker.value ?? "0");
@@ -478,7 +790,10 @@ async function saveCurrentIdea(
     if (existing) {
       await updateIdea(currentID, name, text);
       await clearIdeaCache(currentID);
-      setStatus(refs, `✓ 已更新 #${currentID} ${name}`);
+      setStatus(
+        refs,
+        tx(`✓ 已更新 #${currentID} ${name}`, `✓ Updated #${currentID} ${name}`),
+      );
       await rebuildPicker(doc, refs);
       await refreshScoreMap();
       return;
@@ -487,7 +802,13 @@ async function saveCurrentIdea(
   // Create new
   const newID = await insertIdea(name, text);
   setActiveIdeaID(newID);
-  setStatus(refs, `✓ 已新建 #${newID} ${name}，已设为激活`);
+  setStatus(
+    refs,
+    tx(
+      `✓ 已新建 #${newID} ${name}，已设为激活`,
+      `✓ Created #${newID} ${name} (now active)`,
+    ),
+  );
   await rebuildPicker(doc, refs);
   await refreshScoreMap();
 }
@@ -498,12 +819,18 @@ async function deleteCurrentIdea(
 ): Promise<void> {
   const currentID = parseInt(String(refs.picker.value ?? "0"), 10) || 0;
   if (currentID <= 0) {
-    setStatus(refs, "请先选中一条 idea");
+    setStatus(refs, tx("请先选中一条研究想法", "Pick a research idea first"));
     return;
   }
   const existing = await getIdea(currentID);
   if (!existing) {
-    setStatus(refs, `Idea #${currentID} 已不存在`);
+    setStatus(
+      refs,
+      tx(
+        `研究想法 #${currentID} 已不存在`,
+        `Research idea #${currentID} no longer exists`,
+      ),
+    );
     await rebuildPicker(doc, refs);
     return;
   }
@@ -514,11 +841,14 @@ async function deleteCurrentIdea(
   }
   await rebuildPicker(doc, refs);
   await refreshScoreMap();
-  setStatus(refs, `✓ 已删除 #${currentID}`);
+  setStatus(refs, tx(`✓ 已删除 #${currentID}`, `✓ Deleted #${currentID}`));
 }
 
 function setStatus(refs: IdeaUIRefs, text: string): void {
-  refs.statusLabel.setAttribute("value", text);
+  // XUL <label> in Zotero 9 (Firefox 140 ESR) renders BOTH the `value`
+  // attribute and the textContent — setting both shows the same string
+  // twice. Use textContent only.
+  refs.statusLabel.removeAttribute("value");
   (refs.statusLabel as any).textContent = text;
 }
 

@@ -11,7 +11,6 @@ declare namespace _ZoteroTypes {
       "llm.baseURL": string;
       "llm.apiKey": string;
       "llm.model": string;
-      "researchFocus": string;
       "ranking.mode": string;
       "ranking.scopeCollectionID": number;
       "idea.activeID": number;

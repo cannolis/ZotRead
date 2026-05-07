@@ -10,6 +10,7 @@ import {
 } from "../services/db";
 import {
   computeSimilarityBatchByIDs,
+  getSimilarityMethod,
   SimilarityResult,
   SimilarityRole,
 } from "./similarity";
@@ -32,6 +33,7 @@ export interface RankOptions {
   includeRead?: boolean; // default false (still listed but at bottom)
   includeArchived?: boolean; // default false (excluded)
   onProgress?: (p: RankProgress) => void;
+  signal?: AbortSignal; // user-cancellable; checked at start of each candidate
 }
 
 export interface AnchorBreakdown {
@@ -61,7 +63,7 @@ const STATUS_MULTIPLIER: Record<ItemStatus, number> = {
 export async function rankReadingQueue(
   opts: RankOptions = {},
 ): Promise<RankedItem[]> {
-  const aggregation: Aggregation = opts.aggregation ?? "top3-mean";
+  const aggregation: Aggregation = opts.aggregation ?? "max";
   const limit = opts.limit ?? 50;
 
   const allAnchorIDs = await getActiveAnchorIDs();
@@ -86,6 +88,10 @@ export async function rankReadingQueue(
   let done = 0;
 
   for (const candidate of candidateItems) {
+    if (opts.signal?.aborted) {
+      Zotero.debug(`[ZotRead] rankReadingQueue: aborted at ${done}/${total}`);
+      break;
+    }
     done += 1;
     opts.onProgress?.({
       done,
@@ -106,7 +112,10 @@ export async function rankReadingQueue(
       continue;
     }
 
-    const rawScore = aggregate(sims.map((s) => s.similarity), aggregation);
+    const rawScore = aggregate(
+      sims.map((s) => s.similarity),
+      aggregation,
+    );
     const multiplier = STATUS_MULTIPLIER[status] ?? 1;
     const finalScore = rawScore * multiplier;
 
@@ -158,30 +167,32 @@ async function loadCandidates(
 ): Promise<Zotero.Item[]> {
   let items: Zotero.Item[];
   if (opts.candidates?.length) {
-    items = await Zotero.Items.getAsync(
-      opts.candidates.filter((id) => id > 0),
-    );
+    items = await Zotero.Items.getAsync(opts.candidates.filter((id) => id > 0));
   } else {
     const scopeID = readScopeCollectionID();
-    if (scopeID > 0) {
+    if (scopeID === 0) {
+      // No scope selected — refuse to run. The settings pane prompts
+      // the user to pick a collection or "My library" explicitly.
+      Zotero.debug("[ZotRead] rankReadingQueue: no scope selected — skipping");
+      return [];
+    }
+    if (scopeID < 0) {
+      // -1 means rank against the whole user library.
+      const libID = Zotero.Libraries.userLibraryID;
+      const ids = await Zotero.Items.getAllIDs(libID);
+      items = await Zotero.Items.getAsync(ids);
+    } else {
       const coll = Zotero.Collections.get(scopeID) as
         | Zotero.Collection
         | false
         | undefined;
-      if (coll) {
-        items = coll.getChildItems() ?? [];
-      } else {
+      if (!coll) {
         Zotero.debug(
-          `[ZotRead] scope collection ${scopeID} not found, falling back to library`,
+          `[ZotRead] scope collection ${scopeID} not found — skipping`,
         );
-        const libID = Zotero.Libraries.userLibraryID;
-        const ids = await Zotero.Items.getAllIDs(libID);
-        items = await Zotero.Items.getAsync(ids);
+        return [];
       }
-    } else {
-      const libID = Zotero.Libraries.userLibraryID;
-      const ids = await Zotero.Items.getAllIDs(libID);
-      items = await Zotero.Items.getAsync(ids);
+      items = coll.getChildItems() ?? [];
     }
   }
   return items.filter(
@@ -190,14 +201,16 @@ async function loadCandidates(
 }
 
 function readScopeCollectionID(): number {
-  // Lazy require to avoid circular import with prefs util
+  // Returns: 0 = unselected, -1 = whole library, >0 = collectionID.
+  // Lazy require to avoid circular import with prefs util.
   try {
-    const raw = (Zotero.Prefs.get(
-      "extensions.zotero.zotread.ranking.scopeCollectionID",
-      true,
-    ) as number | string | undefined) ?? 0;
+    const raw =
+      (Zotero.Prefs.get(
+        "extensions.zotero.zotread.ranking.scopeCollectionID",
+        true,
+      ) as number | string | undefined) ?? 0;
     const n = typeof raw === "number" ? raw : parseInt(String(raw), 10);
-    return Number.isFinite(n) && n > 0 ? n : 0;
+    return Number.isFinite(n) ? Math.trunc(n) : 0;
   } catch (_e) {
     return 0;
   }
@@ -212,7 +225,7 @@ export async function getCachedScore(
   itemID: number,
   opts: Pick<RankOptions, "anchorSubset" | "aggregation"> = {},
 ): Promise<{ score: number; breakdown: AnchorBreakdown[] }> {
-  const aggregation = opts.aggregation ?? "top3-mean";
+  const aggregation = opts.aggregation ?? "max";
   const allAnchorIDs = await getActiveAnchorIDs();
   const anchorIDs = opts.anchorSubset?.length
     ? opts.anchorSubset.filter((id) => allAnchorIDs.includes(id))
@@ -222,7 +235,7 @@ export async function getCachedScore(
   const rows = await getEffectiveSimilarities(
     anchorIDs,
     itemID,
-    "llm-judge-v2",
+    getSimilarityMethod(),
   );
   const values: number[] = [];
   const breakdown: AnchorBreakdown[] = [];
@@ -237,7 +250,8 @@ export async function getCachedScore(
   }
   return {
     score: aggregate(values, aggregation),
-    breakdown: breakdown.sort((a, b) => b.similarity - a.similarity).slice(0, 3),
+    breakdown: breakdown
+      .sort((a, b) => b.similarity - a.similarity)
+      .slice(0, 3),
   };
 }
-

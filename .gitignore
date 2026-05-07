@@ -14,3 +14,6 @@ tsconfig.tsbuildinfo
 .scaffold
 build
 logs
+
+# Claude Code session state
+.claude/

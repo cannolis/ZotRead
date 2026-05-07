@@ -73,9 +73,9 @@ async function triageItemById(itemID: number): Promise<TriagedItem> {
 
 // ── arxiv import ────────────────────────────────────────────────────
 
-async function importArxiv(ids: string[]): Promise<
-  Array<{ arxivID: string; itemID: number; title: string }>
-> {
+async function importArxiv(
+  ids: string[],
+): Promise<Array<{ arxivID: string; itemID: number; title: string }>> {
   if (!Array.isArray(ids) || ids.length === 0) {
     throw new Error("Pass an array of arXiv IDs, e.g. ['1706.03762']");
   }
@@ -144,12 +144,14 @@ async function markStatus(itemID: number, status: ItemStatus): Promise<void> {
 
 // ── core reading queue ─────────────────────────────────────────────
 
-async function readingQueue(opts: {
-  limit?: number;
-  aggregation?: Aggregation;
-  anchorSubset?: number[];
-  includeRead?: boolean;
-} = {}): Promise<RankedItem[]> {
+async function readingQueue(
+  opts: {
+    limit?: number;
+    aggregation?: Aggregation;
+    anchorSubset?: number[];
+    includeRead?: boolean;
+  } = {},
+): Promise<RankedItem[]> {
   const queue = await rankReadingQueue(opts);
   // Fresh scores may be in the similarity table — repopulate column.
   await Promise.all([refreshScoreMap(), refreshStatusMap()]);
@@ -160,14 +162,18 @@ async function readingQueue(opts: {
  * Run ranking across the whole library with zero UI friction: after
  * compute, the score column reflects the latest values.
  */
-async function rescoreAll(opts: {
-  limit?: number;
-  onProgress?: (p: { done: number; total: number; title: string }) => void;
-} = {}): Promise<{ ranked: number; topCollection: number }> {
+async function rescoreAll(
+  opts: {
+    limit?: number;
+    onProgress?: (p: { done: number; total: number; title: string }) => void;
+    signal?: AbortSignal;
+  } = {},
+): Promise<{ ranked: number; topCollection: number }> {
   const queue = await rankReadingQueue({
     limit: opts.limit ?? 500,
     onProgress: (p) =>
       opts.onProgress?.({ done: p.done, total: p.total, title: p.title }),
+    signal: opts.signal,
   });
   await Promise.all([refreshScoreMap(), refreshStatusMap()]);
   let topCount = 0;
@@ -245,9 +251,7 @@ async function deleteIdea(ideaID: number): Promise<void> {
   await refreshScoreMap();
 }
 
-async function setActiveIdea(
-  ideaID: number,
-): Promise<IdeaWithActive | null> {
+async function setActiveIdea(ideaID: number): Promise<IdeaWithActive | null> {
   if (ideaID && ideaID > 0) {
     const existing = await getIdea(ideaID);
     if (!existing) throw new Error(`No idea ${ideaID}`);
@@ -322,9 +326,9 @@ async function echo(message = "hello"): Promise<string> {
 
 async function warmSimilaritiesFor(itemID: number): Promise<number> {
   const anchors = await listAnchors();
-  const anchorItems = (await Zotero.Items.getAsync(
-    anchors.map((a) => a.itemID),
-  )).filter((it) => it && it.isRegularItem());
+  const anchorItems = (
+    await Zotero.Items.getAsync(anchors.map((a) => a.itemID))
+  ).filter((it) => it && it.isRegularItem());
   const candidate = await Zotero.Items.getAsync(itemID);
   if (!candidate || !candidate.isRegularItem()) {
     throw new Error(`Item ${itemID} not a regular item`);

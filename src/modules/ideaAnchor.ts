@@ -135,7 +135,7 @@ async function generateIdeaSummary(
 
   const raw = await chatJSON<Partial<PaperSummary>>(
     [{ role: "user", content: prompt }],
-    { temperature: 0, maxTokens: 500, seed: 42 },
+    { temperature: 0, maxTokens: 1500, seed: 42 },
   );
   return normalizeSummary(raw);
 }
@@ -156,8 +156,7 @@ function parseSummary(json: string): PaperSummary {
 }
 
 function normalizeSummary(raw: Partial<PaperSummary>): PaperSummary {
-  const trim = (v: unknown): string =>
-    typeof v === "string" ? v.trim() : "";
+  const trim = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
   return {
     oneLine: trim(raw.oneLine),
     problem: trim(raw.problem),
@@ -165,7 +164,10 @@ function normalizeSummary(raw: Partial<PaperSummary>): PaperSummary {
     finding: trim(raw.finding),
     domain: trim(raw.domain),
     keyTerms: Array.isArray(raw.keyTerms)
-      ? raw.keyTerms.slice(0, 8).map((t) => String(t).trim()).filter(Boolean)
+      ? raw.keyTerms
+          .slice(0, 8)
+          .map((t) => String(t).trim())
+          .filter(Boolean)
       : [],
   };
 }

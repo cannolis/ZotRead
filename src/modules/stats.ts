@@ -4,7 +4,7 @@
  */
 
 import { ensureSchema } from "../services/db";
-import { SIMILARITY_METHOD } from "./similarity";
+import { SIMILARITY_METHOD_PREFIX } from "./similarity";
 
 export interface ZotReadStats {
   anchors: number;
@@ -38,10 +38,9 @@ export async function getStats(): Promise<ZotReadStats> {
     countQuery("SELECT COUNT(*) FROM zotread_anchor"),
     countQuery("SELECT COUNT(*) FROM zotread_idea"),
     countQuery("SELECT COUNT(*) FROM zotread_summary"),
-    countQuery(
-      "SELECT COUNT(*) FROM zotread_similarity WHERE method = ?",
-      [SIMILARITY_METHOD],
-    ),
+    countQuery("SELECT COUNT(*) FROM zotread_similarity WHERE method LIKE ?", [
+      `${SIMILARITY_METHOD_PREFIX}-%`,
+    ]),
     countQuery(
       "SELECT COUNT(*) FROM zotread_status WHERE status = ? AND updatedAt > ?",
       ["read", now - WEEK_MS],
@@ -50,14 +49,12 @@ export async function getStats(): Promise<ZotReadStats> {
       "SELECT COUNT(*) FROM zotread_status WHERE status = ? AND updatedAt > ?",
       ["read", now - MONTH_MS],
     ),
-    countQuery(
-      "SELECT COUNT(*) FROM zotread_status WHERE status = ?",
-      ["read"],
-    ),
-    countQuery(
-      "SELECT COUNT(*) FROM zotread_status WHERE status = ?",
-      ["reading"],
-    ),
+    countQuery("SELECT COUNT(*) FROM zotread_status WHERE status = ?", [
+      "read",
+    ]),
+    countQuery("SELECT COUNT(*) FROM zotread_status WHERE status = ?", [
+      "reading",
+    ]),
   ]);
 
   return {

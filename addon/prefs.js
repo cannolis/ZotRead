@@ -1,15 +1,14 @@
 pref("enable", true);
-pref("llm.baseURL", "https://openrouter.ai/api/v1");
+pref("llm.baseURL", "https://api.deepseek.com");
 pref("llm.apiKey", "");
-pref("llm.model", "openai/gpt-4o-mini");
-pref("researchFocus", "");
+pref("llm.model", "deepseek-v4-flash");
 pref("ranking.mode", "papers");
 pref("ranking.scopeCollectionID", 0);
 pref("idea.activeID", 0);
 pref("ui.language", "");
 pref("topCollection.enabled", true);
 pref("topCollection.size", 20);
-pref("topCollection.name", "📖 ZotRead Top");
+pref("topCollection.name", "ZotRead Top");
 pref("debug.testOnStartup", false);
 pref("debug.arxivIds", "");
 pref("debug.probeArxivID", "");
