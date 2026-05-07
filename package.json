@@ -14,7 +14,10 @@
     "type": "git",
     "url": "git+https://github.com/cannolis/zotread.git"
   },
-  "author": "Carlos",
+  "author": {
+    "name": "Carlos",
+    "email": "lichenglong.me@outlook.com"
+  },
   "bugs": {
     "url": "https://github.com/cannolis/zotread/issues"
   },
