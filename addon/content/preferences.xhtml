@@ -1,9 +1,10 @@
 <linkset>
   <html:link rel="localization" href="__addonRef__-preferences.ftl" />
 </linkset>
-<groupbox
-  onload="Zotero.__addonInstance__.hooks.onPrefsEvent('load', { window })"
->
+<script>
+  Zotero.__addonInstance__.hooks.onPrefsEvent("load", { window });
+</script>
+<groupbox>
   <label><html:h2 data-l10n-id="pref-title"></html:h2></label>
 
   <!-- Status / onboarding banner — populated by preferenceScript -->
