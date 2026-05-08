@@ -55,17 +55,18 @@ export async function registerPrefsScripts(prefsWindow: Window) {
     addon.data.prefs.window = prefsWindow;
   }
 
-  // First-install fix: on a fresh profile, the chrome:// → preferences.ftl
-  // mapping isn't yet warm in Firefox's l10n cache when the prefs pane
-  // first opens, so every `data-l10n-id` element renders blank until the
-  // user interacts with anything (which forces a re-layout). Force the
-  // FTL into this window's document so all labels resolve immediately.
+  // First-install fix: on a fresh profile, every `data-l10n-id` element
+  // can render blank because Firefox's l10n bundle for the prefs FTL
+  // hasn't finished loading yet. Re-translate the DOM once we're past
+  // the initial paint — this is a no-op when l10n is already wired up.
   try {
-    (prefsWindow as any).MozXULElement?.insertFTLIfNeeded?.(
-      `${config.addonRef}-preferences.ftl`,
-    );
-  } catch (_e) {
-    /* non-fatal */
+    const doc = prefsWindow.document;
+    const l10n = (doc as any).l10n;
+    if (l10n?.translateFragment && doc.documentElement) {
+      await Promise.resolve(l10n.translateFragment(doc.documentElement));
+    }
+  } catch (e) {
+    Zotero.debug("[ZotRead] prefs l10n retranslate failed: " + String(e));
   }
 
   bindPrefEvents(prefsWindow);

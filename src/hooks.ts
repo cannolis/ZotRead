@@ -118,6 +118,13 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
     (win as any).MozXULElement.insertFTLIfNeeded(
       `${addon.data.config.addonRef}-mainWindow.ftl`,
     );
+    // Pre-warm the prefs FTL on the main window so when the user opens
+    // Settings → ZotRead the first time on a fresh profile, the bundle
+    // is already known to Firefox's l10n cache. Without this, `data-l10n-id`
+    // elements in the prefs pane render blank on first open.
+    (win as any).MozXULElement.insertFTLIfNeeded(
+      `${addon.data.config.addonRef}-preferences.ftl`,
+    );
   } catch (e) {
     Zotero.debug("[ZotRead] FTL insert failed: " + String(e));
   }
