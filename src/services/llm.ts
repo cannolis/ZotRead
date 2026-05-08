@@ -35,9 +35,31 @@ const DEFAULT_MODEL = "openai/gpt-4o-mini";
 
 export function readConfig(): LLMConfig {
   const baseURL = (getPref("llm.baseURL") as string) || DEFAULT_BASE_URL;
-  const apiKey = (getPref("llm.apiKey") as string) || "";
+  // .trim() removes accidental leading/trailing whitespace from copy-paste.
+  const apiKey = ((getPref("llm.apiKey") as string) || "").trim();
   const model = (getPref("llm.model") as string) || DEFAULT_MODEL;
   return { baseURL: baseURL.replace(/\/+$/, ""), apiKey, model };
+}
+
+/**
+ * HTTP `Authorization: Bearer …` headers must be ByteStrings (latin-1).
+ * If the user pasted an API key with a stray non-ASCII character — a
+ * full-width space, smart quote, an IME-leftover Chinese glyph — fetch
+ * throws a cryptic `TypeError: Headers.append: Cannot convert argument
+ * 2 to ByteString …`. Detect that here and surface a clear message.
+ */
+function validateAsciiApiKey(apiKey: string): void {
+  for (let i = 0; i < apiKey.length; i++) {
+    const code = apiKey.charCodeAt(i);
+    if (code > 127) {
+      const ch = apiKey.charAt(i);
+      throw new Error(
+        `API Key contains a non-ASCII character "${ch}" (code ${code}) at position ${i + 1}. ` +
+          `Please re-paste your key in Settings → ZotRead — it may contain a full-width space, ` +
+          `smart quote, or an IME-leftover character. Real API keys are pure ASCII.`,
+      );
+    }
+  }
 }
 
 let lastErrorToastAt = 0;
@@ -67,6 +89,12 @@ export async function chat(
       "No API key configured. Open Settings → ZotRead and paste one.",
     );
     maybeToastError(e.message);
+    throw e;
+  }
+  try {
+    validateAsciiApiKey(cfg.apiKey);
+  } catch (e) {
+    maybeToastError((e as Error).message);
     throw e;
   }
 

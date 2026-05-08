@@ -1,7 +1,7 @@
 {
   "name": "zotread",
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "ZotRead — Triage your Zotero reading queue. Decide which paper to read next, not just collect more.",
   "config": {
     "addonName": "ZotRead",
@@ -14,10 +14,7 @@
     "type": "git",
     "url": "git+https://github.com/cannolis/zotread.git"
   },
-  "author": {
-    "name": "Carlos",
-    "email": "lichenglong.me@outlook.com"
-  },
+  "author": "Carlos <lichenglong.me@outlook.com>",
   "bugs": {
     "url": "https://github.com/cannolis/zotread/issues"
   },

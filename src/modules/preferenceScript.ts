@@ -55,6 +55,19 @@ export async function registerPrefsScripts(prefsWindow: Window) {
     addon.data.prefs.window = prefsWindow;
   }
 
+  // First-install fix: on a fresh profile, the chrome:// → preferences.ftl
+  // mapping isn't yet warm in Firefox's l10n cache when the prefs pane
+  // first opens, so every `data-l10n-id` element renders blank until the
+  // user interacts with anything (which forces a re-layout). Force the
+  // FTL into this window's document so all labels resolve immediately.
+  try {
+    (prefsWindow as any).MozXULElement?.insertFTLIfNeeded?.(
+      `${config.addonRef}-preferences.ftl`,
+    );
+  } catch (_e) {
+    /* non-fatal */
+  }
+
   bindPrefEvents(prefsWindow);
   await buildIdeaUI(prefsWindow);
   bindMaintenanceButtons(prefsWindow);
