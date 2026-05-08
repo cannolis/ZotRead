@@ -21,7 +21,7 @@ logs
 # Local-only developer scripts/docs (contain personal paths / SSH aliases)
 deploy.sh
 CLAUDE.md
-release-notes-v0.1.md
+release-notes-*.md
 zotero-plugins-pr-draft.md
 zotread-publish-checklist.md
 .serena/
