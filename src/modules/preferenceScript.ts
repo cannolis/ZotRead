@@ -45,6 +45,28 @@ function tx(zh: string, en: string): string {
  * Wires up the multi-idea list + active selector + inline editor.
  */
 export async function registerPrefsScripts(prefsWindow: Window) {
+  // The new prefs <script> trigger fires synchronously while the DOM
+  // is still being parsed — `<menulist>` and other widgets below the
+  // script tag don't exist yet. Wait for the document to finish
+  // parsing before any getElementById call, otherwise pickers stay
+  // empty (no options) on first open.
+  if (prefsWindow.document.readyState !== "complete") {
+    await new Promise<void>((resolve) => {
+      const onReady = () => {
+        if (prefsWindow.document.readyState === "complete") {
+          prefsWindow.document.removeEventListener(
+            "readystatechange",
+            onReady,
+          );
+          resolve();
+        }
+      };
+      prefsWindow.document.addEventListener("readystatechange", onReady);
+      // In case readystatechange already fired before we attached.
+      if (prefsWindow.document.readyState === "complete") resolve();
+    });
+  }
+
   if (!addon.data.prefs) {
     addon.data.prefs = {
       window: prefsWindow,
