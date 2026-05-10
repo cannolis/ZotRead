@@ -124,11 +124,15 @@ export async function registerWhyReadSection(): Promise<void> {
       pluginID,
       header: {
         l10nID: "item-section-zotread-head-text",
-        icon: `chrome://${addonRef}/content/icons/favicon.svg`,
+        // section-icon.svg is a single-path vector with currentColor so
+        // it renders correctly in Zotero's mask-based icon slots
+        // (sidenav, section header). The full-colour favicon.svg is a
+        // raster wrapped in SVG and turns into a flat blob when masked.
+        icon: `chrome://${addonRef}/content/icons/section-icon.svg`,
       },
       sidenav: {
         l10nID: "item-section-zotread-sidenav-tooltip",
-        icon: `chrome://${addonRef}/content/icons/favicon.svg`,
+        icon: `chrome://${addonRef}/content/icons/section-icon.svg`,
       },
       onRender: (data: any) => {
         renderWhyRead(data).catch((e) =>

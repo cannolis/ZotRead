@@ -211,7 +211,7 @@ function registerPrefsPane(): void {
     pluginID: addon.data.config.addonID,
     src: `chrome://${addonRef}/content/preferences.xhtml`,
     label: "ZotRead",
-    image: `chrome://${addonRef}/content/icons/favicon.svg`,
+    image: `chrome://${addonRef}/content/icons/section-icon.svg`,
     defaultXUL: true,
   });
 }
