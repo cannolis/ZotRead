@@ -1,7 +1,7 @@
 {
   "name": "zotread",
   "type": "module",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "ZotRead — Triage your Zotero reading queue. Decide which paper to read next, not just collect more.",
   "config": {
     "addonName": "ZotRead",
