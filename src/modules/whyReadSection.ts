@@ -130,23 +130,25 @@ export async function registerWhyReadSection(): Promise<void> {
         l10nID: "item-section-zotread-sidenav-tooltip",
         icon: `chrome://${addonRef}/content/icons/favicon.svg`,
       },
-      onRender: (data: any) =>
+      onRender: (data: any) => {
         renderWhyRead(data).catch((e) =>
           Zotero.debug("[ZotRead] WhyRead onRender failed: " + String(e)),
-        ),
+        );
+        // (Re-)attach the IntersectionObserver that keeps
+        // `userPrefersZotRead` in sync with whether the user actually
+        // has the section in view, regardless of item-change timing.
+        ensureVisibilityObserver(data);
+      },
       onItemChange: (data: any) => {
-        // Snapshot whether ZotRead is in the viewport BEFORE we trigger
-        // a render — once Zotero processes the item-change it resets
-        // scroll to the top (Info pane), so we'd lose this signal
-        // otherwise.
-        const wasVisible = isSectionInViewport(data);
         renderWhyRead(data).catch((e) =>
           Zotero.debug("[ZotRead] WhyRead onItemChange failed: " + String(e)),
         );
-        // Only auto-scroll back if the user was actually looking at
-        // ZotRead just now (section expanded AND on screen). If they
-        // had scrolled away to Info / Abstract / Tags, respect that.
-        if (wasVisible) bringSectionToFront(data);
+        // Auto-scroll back to ZotRead only when the user was
+        // demonstrably looking at it (the observer reported
+        // intersecting on the previous interaction). Synchronous
+        // viewport checks here race with Zotero's scroll reset, so we
+        // rely on the most recently published observer state instead.
+        if (userPrefersZotRead) bringSectionToFront(data);
       },
     });
     registered = true;
@@ -183,38 +185,64 @@ function findSection(
 }
 
 /**
- * Synchronous viewport check: was the ZotRead section visible to the
- * user right before this item-change fired?
- *
- * Used to decide whether to auto-scroll back to ZotRead. If the user
- * had scrolled away (to read Info, Abstract, Tags, etc.) or collapsed
- * the section, we DON'T want to drag them back. Only when ZotRead is
- * the section they're actually looking at do we re-anchor to it on
- * item navigation.
+ * Tracks whether the user currently has the ZotRead section in view.
+ * Updated asynchronously by an IntersectionObserver attached to the
+ * section element. We can't compute this synchronously inside
+ * onItemChange, because Zotero resets the item-pane scroll *before*
+ * firing onItemChange, so a getBoundingClientRect check at that
+ * moment always reports "not visible" even if the user was just
+ * looking at it. The observer's last-reported state, in contrast,
+ * reflects the user's most recent actual interaction.
  */
-function isSectionInViewport(data: RenderData): boolean {
+let userPrefersZotRead = false;
+let activeObserver: IntersectionObserver | null = null;
+let observedSection: HTMLElement | null = null;
+
+function ensureVisibilityObserver(data: RenderData): void {
   try {
     const section = findSection(data);
-    if (!section) return false;
-    // Collapsed sections still occupy a thin header row, so a tiny
-    // visible slice of a *closed* section shouldn't count as "user
-    // is looking at ZotRead". Require the section to be open AND
-    // have meaningful overlap with the viewport.
-    if (section.open === false) return false;
-    const win = data.doc?.defaultView ?? Zotero.getMainWindow();
-    if (!win) return false;
-    const rect = section.getBoundingClientRect();
-    const viewportH = (win as any).innerHeight ?? 0;
-    if (viewportH <= 0) return false;
-    // At least 10% of either the section or the viewport overlapping.
-    const overlapTop = Math.max(0, rect.top);
-    const overlapBottom = Math.min(viewportH, rect.bottom);
-    const overlap = Math.max(0, overlapBottom - overlapTop);
-    if (overlap <= 0) return false;
-    const minOverlap = Math.min(rect.height, viewportH) * 0.1;
-    return overlap >= minOverlap;
-  } catch (_e) {
-    return false;
+    if (!section) return;
+    if (observedSection === section && activeObserver) return; // already attached
+    activeObserver?.disconnect();
+    observedSection = section;
+
+    const win = data.doc?.defaultView as
+      | (Window & { IntersectionObserver?: typeof IntersectionObserver })
+      | null
+      | undefined;
+    const Observer = win?.IntersectionObserver;
+    if (!Observer) return;
+
+    activeObserver = new Observer(
+      (entries) => {
+        const last = entries[entries.length - 1];
+        // Treat collapsed sections (height ~ header only) as "not in
+        // view" — the user has explicitly hidden the body.
+        const sectionOpen = (section as any).open !== false;
+        userPrefersZotRead =
+          !!last && last.isIntersecting && last.intersectionRatio > 0.1 &&
+          sectionOpen;
+      },
+      { threshold: [0, 0.1, 0.5, 1.0] },
+    );
+    activeObserver.observe(section);
+
+    // Seed the flag once on attach: if the section is currently both
+    // open and at least partially in view, treat the user as
+    // "currently looking at ZotRead" so the very next item-change
+    // follows them back. The observer's first callback will then
+    // refine this within a frame.
+    if ((section as any).open !== false) {
+      const rect = section.getBoundingClientRect();
+      const viewportH = (win as any)?.innerHeight ?? 0;
+      if (viewportH > 0 && rect.bottom > 0 && rect.top < viewportH) {
+        userPrefersZotRead = true;
+      }
+    }
+  } catch (e) {
+    Zotero.debug(
+      "[ZotRead] ensureVisibilityObserver failed: " + String(e),
+    );
   }
 }
 
@@ -314,7 +342,7 @@ async function renderWhyRead(data: RenderData): Promise<void> {
     verdict.label,
     `font-weight: 600; font-size: 13px; color: ${verdict.color}; margin-bottom: 6px;`,
   );
-  appendLabelValue(doc, root, closestLabel, closestValue, "color: #333;");
+  appendLabelValue(doc, root, closestLabel, closestValue, "opacity: 0.95;");
   appendScoreWithEdit(doc, root, s, topRow, topAnchorID, item, data);
   if (topRow.rationale) {
     appendLabelValue(
@@ -322,7 +350,7 @@ async function renderWhyRead(data: RenderData): Promise<void> {
       root,
       s.whyLabel,
       topRow.rationale,
-      "color: #555; font-style: italic; margin-top: 4px;",
+      "opacity: 0.8; font-style: italic; margin-top: 4px;",
     );
   }
 
@@ -333,12 +361,12 @@ async function renderWhyRead(data: RenderData): Promise<void> {
     const divider = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
     divider.setAttribute(
       "style",
-      "margin-top: 10px; padding-top: 6px; border-top: 1px solid #ddd;",
+      "margin-top: 10px; padding-top: 6px; border-top: 1px solid currentColor; border-color: rgba(128,128,128,0.3);",
     );
     const header = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
     header.setAttribute(
       "style",
-      "font-weight: 700; color: #666; font-size: 11px; margin-bottom: 4px;",
+      "font-weight: 700; opacity: 0.7; font-size: 11px; margin-bottom: 4px;",
     );
     header.textContent = s.breakdownLabel;
     divider.appendChild(header);
@@ -356,7 +384,7 @@ async function renderWhyRead(data: RenderData): Promise<void> {
       const line = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
       line.setAttribute(
         "style",
-        "margin: 3px 0; color: #555; font-size: 11px;",
+        "margin: 3px 0; opacity: 0.8; font-size: 11px;",
       );
       const scoreSpan = doc.createElementNS(
         "http://www.w3.org/1999/xhtml",
@@ -364,7 +392,7 @@ async function renderWhyRead(data: RenderData): Promise<void> {
       );
       scoreSpan.setAttribute(
         "style",
-        "display: inline-block; min-width: 32px; font-weight: 700; color: #333;",
+        "display: inline-block; min-width: 32px; font-weight: 700; opacity: 0.95;",
       );
       scoreSpan.textContent = row.similarity.toFixed(2);
       const nameSpan = doc.createElementNS(
@@ -430,7 +458,7 @@ async function renderWhyRead(data: RenderData): Promise<void> {
         const rat = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
         rat.setAttribute(
           "style",
-          "margin-left: 40px; color: #888; font-style: italic; font-size: 10px;",
+          "margin-left: 40px; opacity: 0.6; font-style: italic; font-size: 10px;",
         );
         rat.textContent = row.rationale;
         line.appendChild(rat);
@@ -480,7 +508,7 @@ function appendScoreWithEdit(
   const lang = currentLang();
   const isOverride = topRow?.anchorContentHash === "(override)";
   const row = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
-  row.setAttribute("style", "margin: 2px 0; color: #555;");
+  row.setAttribute("style", "margin: 2px 0; opacity: 0.8;");
 
   const lbl = doc.createElementNS("http://www.w3.org/1999/xhtml", "span");
   lbl.setAttribute("style", "font-weight: 700;");
